@@ -1,0 +1,26 @@
+# Host build output
+bin/
+build/
+out/
+*.exe
+*.o
+*.obj
+*.lib
+
+# Android / Gradle
+.gradle/
+app/build/
+local.properties
+*.apk
+*.aab
+.cxx/
+captures/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+Thumbs.db
+Desktop.ini
