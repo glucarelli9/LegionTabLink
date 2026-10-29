@@ -1,71 +1,71 @@
 # LegionTabLink
 
-**Zero-latency USB second display for the Legion 5 + Galaxy Tab S6 Lite.**
-A Windows host daemon mirrors a virtual monitor to an Android tablet over USB and mirrors the tablet's S-Pen / touch input back onto the Windows desktop — glass-to-glass target under 10 ms.
+**Use any Android tablet as a second USB display for your Windows PC.**
+A lightweight alternative to SuperDisplay — zero-latency hardware-accelerated HEVC streaming over USB, with cursor overlay and pen/touch input passthrough.
 
 ## How it works
 
 ```text
-Windows host (host-streamer.exe)                Android tablet (LegionTabLink app)
+Windows PC (host-streamer.exe)                  Android tablet (LegionTabLink app)
 +---------------------------------+             +---------------------------------+
-| Virtual-Display-Driver (IDD)    |             |  SurfaceView + Immersive UI     |
-|   2000x1200 @ 60 Hz             |             |            ^                    |
+| Virtual Display Driver (IDD)    |             |  SurfaceView (immersive)        |
+|   2000x1200 @ 90 Hz            |             |            ^                    |
 |            v                    |             |            | releaseOutputBuffer|
-|  IDXGIOutputDuplication  ------ removes BGRA    |            |                    |
-|  (same ID3D11Device)            |             |  MediaCodec HEVC decoder        |
-|            v                    |   USB 2.0   |  KEY_LOW_LATENCY, QTI low-lat   |
-|  Encoder on the SAME adapter    | ----------->|            ^                    |
-|   AMD AMF (Radeon 780M)  or     |  video 27183|  WireProtocol reader            |
-|   NVENC (RTX 5060, dGPU mode)   |             |                                 |
-|            v   HEVC Annex B     |             |  LtlCaptureView                 |
-|  TCP frame sender, TCP_NODELAY  | <-----------|  unbuffered pen / touch events  |
-|                                 |  input 27184|                                 |
-|  Synthetic-Pointer injection    |             |                                 |
-|   (S-Pen pressure/tilt/buttons) |             |                                 |
+|  DXGI Desktop Duplication       |             |  MediaCodec HEVC decoder        |
+|  + GDI cursor composite         |   USB 2.0   |  (KEY_LOW_LATENCY)             |
+|            v                    | ----------->|            ^                    |
+|  AMD AMF HEVC encoder           |  video:27183|  Wire protocol reader           |
+|  (or NVENC for NVIDIA GPUs)     |             |                                 |
+|            v                    | <-----------|  Touch / pen input events       |
+|  TCP sender (TCP_NODELAY)       |  input:27184|                                 |
 +---------------------------------+             +---------------------------------+
+        Connected via ADB reverse tunnels over USB
 ```
 
-## Design rules
+## Prerequisites
 
-- **Zero-copy, same-adapter:** the encoder is instantiated on the exact `IDXGIAdapter1` that owns the duplicated output; the desktop-duplication texture is handed straight to the encoder — no CPU copies, no PCIe round-trips.
-- **Hybrid-iGPU safe:** on battery / USB-C PD, the RTX 5060 stays asleep. Capture + encode run natively on the Radeon 780M via AMF. NVENC is only used when the virtual output itself is NVIDIA-owned (desk mode).
-- **Single-frame VBV:** 25 Mbps CBR with a 416 666-bit VBV buffer (1 frame at 60 Hz), `ULTRA_LOW_LATENCY` usage, `SPEED` preset, infinite GOP (on-demand IDR on connect / packet loss).
-- **Decoder-first transport:** vertices request an IDR over the input socket when the queue overflows or on (re)connect; the host consumes the request on the next encoded frame.
+| Component | Details |
+|-----------|---------|
+| **OS** | Windows 10/11 |
+| **Virtual Display** | [Virtual-Display-Driver](https://github.com/VirtualDrivers/Virtual-Display-Driver) (IddCx) configured for your tablet resolution |
+| **GPU** | AMD (AMF via `amfrt64.dll`) or NVIDIA (NVENC via `nvEncodeAPI64.dll`) — loaded at runtime, no SDK needed |
+| **ADB** | `adb.exe` on PATH ([Android Platform Tools](https://developer.android.com/tools/releases/platform-tools)) |
+| **Tablet** | Android 12+ (SDK 31) with USB debugging enabled |
 
-## Wire protocol (`protocol/packet_spec.h`, little-endian, `#pragma pack(1)`)
+## Setup from scratch
 
-| Packet | Size | Direction | Payload |
-|---|---|---|---|
-| Header | 8 B | — | magic `0x4C 0x54`, packet type, version, `u32` payload size |
-| Hello | 8 B | client → host | max tablet resolution, preferred codec (HEVC) |
-| Config | 12 B | host → client | width, height, fps, bitrate Mbps, codec |
-| Video | variable | host → client | 4 B keyframe flag + raw Annex-B HEVC NALs |
-| IdrRequest | 8 B | client → host | empty (header only, on input socket) |
-| Input | 204 B | client → host | device kind, action, 10 × 20 B pointer records (x, y, pressure `f32`, tilt `i16`, id/state/buttons/tool) |
-| Bye | 8 B | both | session end |
+### 1. Install Virtual Display Driver
 
-Ports: **27183** video, **27184** input — both loopback. The host auto-spawns `adb forward tcp:27183 tcp:27183` / `tcp:27184 tcp:27184`, so everything flows over the USB cable.
+1. Download and install [Virtual-Display-Driver](https://github.com/VirtualDrivers/Virtual-Display-Driver)
+2. Edit `C:\VirtualDisplayDriver\vdd_settings.xml` to add your tablet's resolution:
+   ```xml
+   <Resolution>
+     <Width>2000</Width>
+     <Height>1200</Height>
+     <RefreshRates>
+       <Rate>90</Rate>
+       <Rate>60</Rate>
+     </RefreshRates>
+   </Resolution>
+   ```
+3. Enable the driver in Device Manager → Display adapters → Virtual Display Driver
 
-## Requirements
+### 2. Build the Windows host
 
-- Windows 10/11 + [Virtual-Display-Driver](https://github.com/VirtualDrivers/Virtual-Display-Driver) (MTT IDD) set to **2000×1200 @ 60 Hz** (an existing output with matching resolution also works)
-- `adb.exe` on `PATH`, tablet with USB debugging enabled
-- AMD driver (provides `amfrt64.dll`) and/or NVIDIA driver (`nvEncodeAPI64.dll`) — both are loaded at runtime via `GetProcAddress`, no SDKs needed to run
-- Android min SDK **31** (Android 12), target SDK 34, Kotlin 1.9 toolchain via Gradle
-
-## Build — Windows host (C++20)
-
-CMake (MSVC or MinGW):
+**Requirements:** Visual Studio 2022 with C++ workload, or MinGW-w64.
 
 ```powershell
-cmake -S host-windows -B build -G "Visual Studio 17 2022"
-cmake --build build --config Release
+# CMake (recommended)
+cd host-windows
+mkdir build && cd build
+cmake ..
+cmake --build . --config Release
 ```
 
-Or directly with MinGW-w64 g++:
+The output is `host-windows/build/Release/host-streamer.exe`.
 
+**MinGW alternative:**
 ```powershell
-$env:Path = "C:\msys64\ucrt64\bin;$env:Path"
 g++ -std=c++20 -O2 -DWIN32_LEAN_AND_MEAN -DNOMINMAX -D_WIN32_WINNT=0x0A00 `
     -I host-windows/src -I host-windows/include -I protocol `
     host-windows/src/*.cpp -o host-streamer.exe `
@@ -73,42 +73,154 @@ g++ -std=c++20 -O2 -DWIN32_LEAN_AND_MEAN -DNOMINMAX -D_WIN32_WINNT=0x0A00 `
     -lws2_32 -ld3d11 -ldxgi -lole32 -luser32 -lgdi32
 ```
 
-## Build — Android client
+### 3. Build the Android APK
 
-Open `client-android/` in Android Studio (or `./gradlew assembleDebug`), enable USB debugging on the tablet, and install:
+**Requirements:** Android Studio or just the Android SDK with Gradle.
 
 ```powershell
-adb install app\build\outputs\apk\debug\app-debug.apk
+cd client-android
+
+# Set SDK path if not using Android Studio
+echo "sdk.dir=C:\\Users\\YourUser\\AppData\\Local\\Android\\Sdk" > local.properties
+
+./gradlew assembleDebug
 ```
 
-## Run
+The APK is at `client-android/app/build/outputs/apk/debug/app-debug.apk`.
 
-1. Plug the tablet in via USB, allow debugging, keep the screen awake.
-2. Start `host-streamer.exe` — it locates the 2000×1200 output, picks the encoder by the **owning adapter's vendor ID** (`0x1002` → AMF, `0x10DE` → NVENC), spawns the `adb forward` rules, and waits.
-3. Launch the app; the tablet screen becomes the virtual monitor, S-Pen and touch input flow back to Windows.
+### 4. Install APK on tablet
 
-```text
-host-streamer [options]
+```powershell
+adb install -r client-android/app/build/outputs/apk/debug/app-debug.apk
+```
+
+## Running
+
+```powershell
+# 1. Connect tablet via USB, allow USB debugging prompt on tablet
+
+# 2. Set up ADB reverse tunnels
+adb reverse tcp:27183 tcp:27183
+adb reverse tcp:27184 tcp:27184
+
+# 3. Launch the app on tablet
+adb shell am start -n com.legion.tablink/.MainActivity
+
+# 4. Start the host streamer
+.\host-windows\build\Release\host-streamer.exe
+```
+
+The tablet should now mirror the virtual display. Press **Escape** on the host to stop.
+
+### Host options
+
+```
+host-streamer.exe [options]
   --width N      virtual display width  (default 2000)
   --height N     virtual display height (default 1200)
-  --fps N        encoder frame rate     (default 60)
-  --bitrate N    target bitrate in Mbps (default 25)
+  --fps N        encoder frame rate     (default 30)
+  --bitrate N    target bitrate in Mbps (default 20)
 ```
+
+## Current configuration (what works)
+
+| Setting | Value | Notes |
+|---------|-------|-------|
+| FPS | 30 | Balances quality and USB bandwidth |
+| Bitrate | 20 Mbps | Enough for sharp desktop content |
+| IDR interval | 30 frames | ~1 keyframe/second for fast recovery |
+| Decoder queue | 4 frames | Low latency, drops old frames on overflow |
+| Codec | HEVC | Hardware encode (AMF/NVENC) + hardware decode (MediaCodec) |
+
+## Wire protocol
+
+Little-endian, `#pragma pack(1)`. Header: magic `0x4C54`, type, version, payload size (u32).
+
+| Packet | Type | Direction | Description |
+|--------|------|-----------|-------------|
+| Hello | 1 | client → host | Max resolution, preferred codec |
+| Config | 2 | host → client | Width, height, fps, bitrate, codec |
+| Video | 3 | host → client | Keyframe flag (4B) + Annex-B HEVC NALs |
+| IdrRequest | 4 | client → host | Request keyframe (header only) |
+| Input | 5 | client → host | Touch/pen events (up to 10 pointers) |
+| Bye | 6 | both | Session end |
 
 ## Repo layout
 
-```text
-protocol/packet_spec.h        shared wire structs — canonical, imported by both sides
-host-windows/                 host daemon: capture, AMF/NVENC backends, adb transport,
-                              Synthetic-Pointer pen/touch injection
-host-windows/include/         vendored AMF public headers (MIT) + nvEncodeAPI.h (MIT)
-client-android/               Compose-free Kotlin app: StreamClient, LowLatencyDecoder,
-                              InputSender (LtlCaptureView), MainActivity
-plan.md                       full design document
+```
+protocol/packet_spec.h        Wire protocol structs (shared by both sides)
+host-windows/
+  src/main.cpp                 Main loop: capture → encode → send
+  src/DxgiCapture.cpp/hpp      DXGI Desktop Duplication + cursor composite
+  src/AmfEncoder.cpp/hpp       AMD AMF HEVC encoder with extradata handling
+  src/NvencEncoder.cpp/hpp     NVIDIA NVENC HEVC encoder
+  src/IVideoEncoder.hpp        Encoder interface
+  src/AdbSocketServer.cpp/hpp  TCP transport over ADB reverse tunnels
+  src/PenTouchInjector.cpp     Windows Synthetic Pointer injection
+  include/                     Vendored AMF + NVENC headers (MIT)
+client-android/
+  app/src/main/java/com/legion/tablink/
+    MainActivity.kt            Surface lifecycle management
+    StreamClient.kt            Wire protocol reader
+    LowLatencyDecoder.kt       MediaCodec HEVC decoder with queue management
+    InputSender.kt             Touch/pen event sender
+ROADMAP.md                     Future plans (UI, multi-tablet, installer)
 ```
 
-## Status
+## Editing the code
 
-- Windows host: builds clean with MinGW-w64 g++ 15.2, smoke-tested output enumeration (expects a matching virtual display to proceed).
-- Android client: reviewed against the wire spec byte-for-byte; build it in Android Studio — no CI yet.
-- Not yet done: virtual-display auto-install, per-session renegotiation of resolution, adaptive bitrate.
+### Modifying the host
+
+All host source is in `host-windows/src/`. After editing:
+
+```powershell
+cmake --build host-windows/build --config Release
+```
+
+Key files to know:
+- **main.cpp** — frame rate, bitrate, IDR interval, dirty frame logic
+- **AmfEncoder.cpp** — AMD-specific encoding, extradata extraction, IDR detection
+- **DxgiCapture.cpp** — frame capture, cursor overlay, display enumeration
+
+### Modifying the Android app
+
+All Kotlin source is in `client-android/app/src/main/java/com/legion/tablink/`. After editing:
+
+```powershell
+cd client-android
+./gradlew assembleDebug
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+```
+
+Key files to know:
+- **LowLatencyDecoder.kt** — queue depth, timeouts, keyframe handling
+- **StreamClient.kt** — wire protocol parsing, connection management
+- **MainActivity.kt** — surface setup, fullscreen/immersive mode
+
+### Debugging
+
+```powershell
+# Android decoder logs
+adb logcat -s LTL-DEC LTL-MAIN LTL
+
+# Host logs appear in stderr (the console window)
+```
+
+## Tested hardware
+
+| PC | GPU | Tablet | Resolution | Status |
+|----|-----|--------|------------|--------|
+| Custom desktop | AMD RX 9060 XT | Lenovo Tab Plus | 2000x1200 @ 90Hz | ✅ Working |
+
+## Known issues & fixes applied
+
+See [ROADMAP.md](ROADMAP.md) for planned features. Major bugs fixed during development:
+
+1. **AMF pipeline delay** — First encoded frame is not the requested IDR. Fixed by extracting VPS/SPS/PPS from `AMF_VIDEO_ENCODER_HEVC_EXTRADATA` after encoder init.
+2. **DPI scaling** — DXGI reports scaled coordinates without `SetProcessDpiAwarenessContext`. Fixed.
+3. **Decoder stall** — `awaitingKeyframe` flag never reset after codec creation. Fixed in `pollFrameIfKeyframe()`.
+4. **Cursor invisible** — Desktop Duplication separates cursor from frame. Fixed with GDI-compatible staging texture + `DrawIconEx`.
+
+## License
+
+See individual files. AMF and NVENC headers are MIT-licensed.
