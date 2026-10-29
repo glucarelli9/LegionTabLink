@@ -1,16 +1,13 @@
-plugins
-{
+plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
 }
 
-android
-{
+android {
     namespace = "com.legion.tablink"
     compileSdk = 34
 
-    defaultConfig
-    {
+    defaultConfig {
         applicationId = "com.legion.tablink"
         minSdk = 31
         targetSdk = 34
@@ -18,23 +15,19 @@ android
         versionName = "1.0"
     }
 
-    buildTypes
-    {
-        release
-        {
+    buildTypes {
+        release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
         }
     }
 
-    compileOptions
-    {
+    compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    kotlinOptions
-    {
+    kotlinOptions {
         jvmTarget = "17"
     }
 }

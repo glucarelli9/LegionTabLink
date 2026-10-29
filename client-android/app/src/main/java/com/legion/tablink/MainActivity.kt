@@ -2,6 +2,7 @@ package com.legion.tablink
 
 import android.app.Activity
 import android.os.Bundle
+import android.util.Log
 import android.view.SurfaceHolder
 import android.view.ViewGroup
 import android.view.WindowInsets
@@ -18,15 +19,18 @@ class MainActivity : Activity(){
     {
         override fun surfaceCreated(holder: SurfaceHolder)
         {
+            Log.d("LTL-MAIN", "surfaceCreated: valid=${holder.surface.isValid}")
             decoder.attachSurface(holder.surface)
         }
 
         override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int)
         {
+            Log.d("LTL-MAIN", "surfaceChanged: ${width}x${height} format=$format")
         }
 
         override fun surfaceDestroyed(holder: SurfaceHolder)
         {
+            Log.d("LTL-MAIN", "surfaceDestroyed")
             decoder.attachSurface(null)
         }
     }
@@ -42,7 +46,6 @@ class MainActivity : Activity(){
     override fun onCreate(savedInstanceState: Bundle?)
     {
         super.onCreate(savedInstanceState)
-        applyImmersiveChrome()
 
         val metrics = resources.displayMetrics
         val tabletWidth = metrics.widthPixels.coerceAtLeast(1)
@@ -55,6 +58,7 @@ class MainActivity : Activity(){
         captureView = LtlCaptureView(this, inputSender)
         captureView.holder.addCallback(surfaceLifecycle)
         setContentView(captureView, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        applyImmersiveChrome()
     }
 
     override fun onResume()

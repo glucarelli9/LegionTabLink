@@ -163,13 +163,9 @@ void PenTouchInjector::BuildPointerEntry(bool pen, bool first, const Entry& entr
 
 void PenTouchInjector::FlushFrame(bool pen, const Entry* entries, uint32_t count)
 {
-#ifdef __MINGW32__
     const HSYNTHETICPOINTERDEVICE device = pen
         ? static_cast<HSYNTHETICPOINTERDEVICE>(m_penDevice)
         : static_cast<HSYNTHETICPOINTERDEVICE>(m_touchDevice);
-#else
-    const HPOINTER device = pen ? m_penDevice : m_touchDevice;
-#endif
     uint32_t effective = count;
     if (pen && effective > 1)
     {

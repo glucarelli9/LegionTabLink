@@ -13,8 +13,8 @@ namespace
 {
     constexpr DWORD DefaultWidth = 2000;
     constexpr DWORD DefaultHeight = 1200;
-    constexpr DWORD DefaultFps = 60;
-    constexpr DWORD DefaultBitrateMbps = 25;
+    constexpr DWORD DefaultFps = 30;
+    constexpr DWORD DefaultBitrateMbps = 20;
 
     void ShowUsage()
     {
@@ -73,6 +73,8 @@ namespace
 
 int main(int argc, char** argv)
 {
+    // Make DXGI report physical pixels, not DPI-scaled coordinates
+    ::SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     DWORD width = DefaultWidth;
     DWORD height = DefaultHeight;
     DWORD fps = DefaultFps;
@@ -145,6 +147,24 @@ int main(int argc, char** argv)
 
     std::vector<uint8_t> bitstream;
     bool previousConnectionAlive = false;
+    DWORD noFrameTicks = 0;
+    DWORD framesSinceIdr = 0;
+    constexpr DWORD IdrInterval = 30; // Force IDR every ~1 second at 30fps
+
+    // Force DXGI to produce a frame on a static virtual display by nudging
+    // a 1-pixel invisible region.  We move the cursor 1px at the top-left
+    // corner of the virtual display and back — invisible to the user but
+    // enough for DXGI to report a new frame.
+    auto forceDirtyFrame = [&monitorRect]()
+    {
+        const LONG x = monitorRect.left;
+        const LONG y = monitorRect.top;
+        ::SetCursorPos(x, y);
+        ::Sleep(1);
+        ::SetCursorPos(x + 1, y);
+        ::Sleep(1);
+        ::SetCursorPos(x, y);
+    };
 
     for (;;)
     {
@@ -153,26 +173,59 @@ int main(int argc, char** argv)
             if (previousConnectionAlive)
             {
                 previousConnectionAlive = false;
+                noFrameTicks = 0;
                 std::fprintf(stderr, "[main] awaiting tablet client\n");
             }
             ::Sleep(2);
             continue;
         }
-        previousConnectionAlive = true;
+        if (!previousConnectionAlive)
+        {
+            previousConnectionAlive = true;
+            noFrameTicks = 0;
+            std::fprintf(stderr, "[main] client active, capturing frames\n");
+            forceDirtyFrame();
+        }
 
         ID3D11Texture2D* frame = nullptr;
-        if (!capture.AcquireFrame(&frame, 33))
+        bool acquired = capture.AcquireFrame(&frame, 11);
+        if (acquired)
         {
-            ::Sleep(0);
-            continue;
+            noFrameTicks = 0;
+            ++framesSinceIdr;
+            // Got a new frame from DXGI — encode and send it.
+            bool wantKeyframe = server.ConsumeIdrRequest();
+            if (framesSinceIdr >= IdrInterval)
+            {
+                wantKeyframe = true;
+            }
+            bool actuallyIdr = false;
+            if (encoder->EncodeFrame(frame, wantKeyframe, bitstream, actuallyIdr) && !bitstream.empty())
+            {
+                if (actuallyIdr)
+                {
+                    framesSinceIdr = 0;
+                }
+                server.SendVideoFrame(bitstream.data(), bitstream.size(), actuallyIdr);
+            }
+            else if (wantKeyframe)
+            {
+                server.ForceIdr();
+            }
+            capture.ReleaseFrame();
         }
-
-        const bool keyframe = server.ConsumeIdrRequest();
-        if (encoder->EncodeFrame(frame, keyframe, bitstream) && !bitstream.empty())
+        else
         {
-            server.SendVideoFrame(bitstream.data(), bitstream.size(), keyframe);
+            // Static screen — only force a dirty frame when an IDR was
+            // requested (decoder recovery) or every ~2s as heartbeat.
+            ++noFrameTicks;
+            if (server.ConsumeIdrRequest() || noFrameTicks > 2000)
+            {
+                forceDirtyFrame();
+                noFrameTicks = 0;
+            }
+            ::Sleep(1);
         }
-        capture.ReleaseFrame();
 
         if (::GetAsyncKeyState(VK_ESCAPE) & 0x8000)
         {

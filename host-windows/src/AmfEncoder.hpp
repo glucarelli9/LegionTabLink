@@ -24,7 +24,7 @@ public:
     AmfEncoder& operator=(const AmfEncoder&) = delete;
 
     bool Initialize(ID3D11Device* device, uint32_t width, uint32_t height, uint32_t bitrate) override;
-    bool EncodeFrame(ID3D11Texture2D* frame, bool keyframe, std::vector<uint8_t>& outNal) override;
+    bool EncodeFrame(ID3D11Texture2D* frame, bool keyframe, std::vector<uint8_t>& outNal, bool& outIsIdr) override;
     void Shutdown() override;
 
 private:
@@ -37,4 +37,5 @@ private:
     amf::AMFFactory* m_factory = nullptr;
     amf::AMFContext* m_context = nullptr;
     amf::AMFComponent* m_encoder = nullptr;
+    std::vector<uint8_t> m_extraData;
 };

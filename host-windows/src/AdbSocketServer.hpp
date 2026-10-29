@@ -35,6 +35,7 @@ public:
 
     bool IsVideoConnected() const;
     bool ConsumeIdrRequest();
+    void ForceIdr();
     bool SendVideoFrame(const uint8_t* payload, size_t payloadSize, bool keyframe);
 
 private:

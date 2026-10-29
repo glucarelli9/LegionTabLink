@@ -1,17 +1,13 @@
-pluginManagement
-{
-    repositories
-    {
+pluginManagement {
+    repositories {
         google()
         mavenCentral()
         gradlePluginPortal()
     }
 }
-dependencyResolutionManagement
-{
+dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
-    repositories
-    {
+    repositories {
         google()
         mavenCentral()
     }

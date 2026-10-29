@@ -1,5 +1,6 @@
 package com.legion.tablink
 
+import android.util.Log
 import java.io.BufferedInputStream
 import java.io.DataInputStream
 import java.io.IOException
@@ -114,13 +115,18 @@ class StreamClient(
             val socket = Socket()
             try
             {
+                Log.d("LTL", "Connecting to $host:$videoPort...")
                 socket.connect(InetSocketAddress(host, videoPort), 4000)
                 socket.tcpNoDelay = true
+                Log.d("LTL", "Connected, sending hello")
                 sendHello(socket)
+                Log.d("LTL", "Hello sent, receiving packets")
                 receivePackets(socket)
+                Log.d("LTL", "receivePackets returned")
             }
-            catch (ignored: IOException)
+            catch (e: IOException)
             {
+                Log.e("LTL", "Connection error", e)
             }
             finally
             {
@@ -167,12 +173,19 @@ class StreamClient(
         val header = ByteArray(WireProtocol.PacketHeaderSize)
         while (running.get())
         {
-            readFully(source, header) ?: return
+            val headerData = readFully(source, header.size)
+            if (headerData == null) {
+                Log.e("LTL", "receivePackets: header read returned null, exiting")
+                return
+            }
+            System.arraycopy(headerData, 0, header, 0, header.size)
             val magic0 = header[0].toInt() and 0xFF
             val magic1 = header[1].toInt() and 0xFF
+            Log.d("LTL", "Packet: magic=0x${String.format("%02X%02X", magic0, magic1)} type=${header[2].toInt() and 0xFF} ver=${header[3].toInt() and 0xFF}")
             if (magic0 != WireProtocol.Magic0 || magic1 != WireProtocol.Magic1
                 || (header[3].toInt() and 0xFF) != WireProtocol.ProtocolVersion)
             {
+                Log.e("LTL", "Invalid header magic/version, exiting")
                 return
             }
             val payloadSize = ((header[4].toInt() and 0xFF)
@@ -200,6 +213,7 @@ class StreamClient(
                     val fps = parameters.short.toInt() and 0xFFFF
                     val bitrateMbps = parameters.short.toInt() and 0xFFFF
                     val codec = parameters.get().toInt() and 0xFF
+                    Log.d("LTL", "Config: ${width}x${height} @ $fps fps, codec=$codec")
                     decoder.onStreamConfigured(width, height, codec)
                 }
 
@@ -207,6 +221,7 @@ class StreamClient(
                 {
                     if (payloadSize < WireProtocol.VideoFrameHeaderSize)
                     {
+                        Log.w("LTL", "Video packet too small: $payloadSize")
                         return
                     }
                     val frameHeader = readFully(source, WireProtocol.VideoFrameHeaderSize) ?: return
@@ -265,6 +280,7 @@ class StreamClient(
         }
         catch (exception: IOException)
         {
+            Log.e("LTL", "readFully($size) failed: ${exception.message}")
             return null
         }
         return data

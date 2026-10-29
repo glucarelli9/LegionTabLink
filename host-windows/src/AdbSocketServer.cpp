@@ -225,6 +225,11 @@ bool AdbSocketServer::ConsumeIdrRequest()
     return m_idrPending.exchange(false);
 }
 
+void AdbSocketServer::ForceIdr()
+{
+    m_idrPending.store(true);
+}
+
 void AdbSocketServer::ListenLoopVideo()
 {
     while (m_running.load())

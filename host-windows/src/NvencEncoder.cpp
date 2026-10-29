@@ -125,9 +125,10 @@ bool NvencEncoder::Initialize(ID3D11Device* device, uint32_t width, uint32_t hei
     return true;
 }
 
-bool NvencEncoder::EncodeFrame(ID3D11Texture2D* frame, bool keyframe, std::vector<uint8_t>& outNal)
+bool NvencEncoder::EncodeFrame(ID3D11Texture2D* frame, bool keyframe, std::vector<uint8_t>& outNal, bool& outIsIdr)
 {
     outNal.clear();
+    outIsIdr = keyframe; // NVENC doesn't have pipeline delay like AMF
     if (m_session == nullptr || frame == nullptr)
     {
         return false;

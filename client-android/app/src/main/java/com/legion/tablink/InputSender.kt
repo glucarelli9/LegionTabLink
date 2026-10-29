@@ -2,6 +2,7 @@ package com.legion.tablink
 
 import android.annotation.SuppressLint
 import android.view.MotionEvent
+import android.view.SurfaceView
 import android.view.View
 import java.io.IOException
 import java.net.InetSocketAddress
@@ -28,7 +29,7 @@ data class LtlPointerSample(
 }
 
 @SuppressLint("ClickableViewAccessibility")
-class LtlCaptureView(context: android.content.Context, private val inputSender: InputSender) : View(context)
+class LtlCaptureView(context: android.content.Context, private val inputSender: InputSender) : SurfaceView(context)
 {
     override fun onTouchEvent(event: MotionEvent): Boolean
     {

@@ -230,11 +230,16 @@ bool DxgiCapture::Start(uint32_t expectedWidth, uint32_t expectedHeight)
     m_width = duplicationDesc.ModeDesc.Width;
     m_height = duplicationDesc.ModeDesc.Height;
     std::fprintf(stderr, "[dxgi] duplication active %ux%u format=%d\n", m_width, m_height, static_cast<int>(duplicationDesc.ModeDesc.Format));
+    if (!CreateStagingTexture())
+    {
+        std::fprintf(stderr, "[dxgi] WARNING: GDI-compatible staging texture failed, cursor overlay disabled\n");
+    }
     return true;
 }
 
 void DxgiCapture::Stop()
 {
+    m_stagingTexture.Reset();
     m_activeFrame.Reset();
     m_duplication.Reset();
     m_output.Reset();
@@ -322,9 +327,92 @@ bool DxgiCapture::AcquireFrame(ID3D11Texture2D** frame, uint32_t timeoutMs)
         return false;
     }
 
-    m_activeFrame = std::move(texture);
-    *frame = m_activeFrame.Get();
+    // Track cursor updates for composite
+    if (frameInfo.LastMouseUpdateTime.QuadPart != 0)
+    {
+        m_cursorVisible = frameInfo.PointerPosition.Visible != 0;
+        m_cursorPos.x = frameInfo.PointerPosition.Position.x;
+        m_cursorPos.y = frameInfo.PointerPosition.Position.y;
+    }
+    if (frameInfo.PointerShapeBufferSize > 0)
+    {
+        m_cursorShape.resize(frameInfo.PointerShapeBufferSize);
+        UINT required = 0;
+        m_duplication->GetFramePointerShape(
+            static_cast<UINT>(m_cursorShape.size()),
+            m_cursorShape.data(),
+            &required,
+            &m_cursorInfo);
+    }
+
+    // Composite cursor onto a staging copy of the desktop texture
+    if (m_cursorVisible && !m_cursorShape.empty() && m_stagingTexture)
+    {
+        ComposeCursor(texture.Get(), frameInfo);
+        *frame = m_stagingTexture.Get();
+    }
+    else
+    {
+        m_activeFrame = std::move(texture);
+        *frame = m_activeFrame.Get();
+    }
     return true;
+}
+
+bool DxgiCapture::CreateStagingTexture()
+{
+    if (m_stagingTexture)
+    {
+        return true;
+    }
+    D3D11_TEXTURE2D_DESC desc{};
+    desc.Width = m_width;
+    desc.Height = m_height;
+    desc.MipLevels = 1;
+    desc.ArraySize = 1;
+    desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    desc.SampleDesc.Count = 1;
+    desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.BindFlags = D3D11_BIND_RENDER_TARGET;
+    desc.MiscFlags = D3D11_RESOURCE_MISC_GDI_COMPATIBLE;
+    return SUCCEEDED(m_device->CreateTexture2D(&desc, nullptr, &m_stagingTexture));
+}
+
+void DxgiCapture::ComposeCursor(ID3D11Texture2D* desktopFrame, const DXGI_OUTDUPL_FRAME_INFO& info)
+{
+    if (!m_stagingTexture || !m_context)
+    {
+        return;
+    }
+    // Copy desktop to staging
+    m_context->CopyResource(m_stagingTexture.Get(), desktopFrame);
+
+    // Draw cursor via GDI onto the staging texture
+    Microsoft::WRL::ComPtr<IDXGISurface1> gdiSurface;
+    if (FAILED(m_stagingTexture.As(&gdiSurface)))
+    {
+        return;
+    }
+    HDC hdc = nullptr;
+    if (FAILED(gdiSurface->GetDC(FALSE, &hdc)) || hdc == nullptr)
+    {
+        return;
+    }
+
+    // The cursor shape from DXGI is in m_cursorShape with m_cursorInfo describing it.
+    // For DXGI_OUTDUPL_POINTER_SHAPE_TYPE_MONOCHROME and COLOR, we draw it directly.
+    // Simplest approach: use DrawIconEx with the current system cursor.
+    CURSORINFO ci{};
+    ci.cbSize = sizeof(ci);
+    if (::GetCursorInfo(&ci) && ci.flags == CURSOR_SHOWING && ci.hCursor != nullptr)
+    {
+        // Convert screen coords to local texture coords
+        const LONG localX = m_cursorPos.x;
+        const LONG localY = m_cursorPos.y;
+        ::DrawIconEx(hdc, localX, localY, ci.hCursor, 0, 0, 0, nullptr, DI_NORMAL);
+    }
+
+    gdiSurface->ReleaseDC(nullptr);
 }
 
 void DxgiCapture::ReleaseFrame()
