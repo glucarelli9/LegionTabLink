@@ -3,25 +3,10 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- Monitor body -->
-    <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M28,32 L80,32 Q83,32 83,35 L83,65 Q83,68 80,68 L28,68 Q25,68 25,65 L25,35 Q25,32 28,32 Z" />
-    <!-- Screen inner -->
-    <path
-        android:fillColor="#16C79A"
-        android:pathData="M29,36 L79,36 L79,64 L29,64 Z" />
-    <!-- Stand -->
-    <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M48,68 L60,68 L58,74 L50,74 Z" />
-    <!-- Base -->
-    <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M42,74 L66,74 Q67,74 67,75.5 Q67,77 66,77 L42,77 Q41,77 41,75.5 Q41,74 42,74 Z" />
-    <!-- Arrow (connection symbol) -->
-    <path
-        android:fillColor="#1A1A2E"
-        android:pathData="M46,50 L62,50 L57,44 L60,44 L66,50 L60,56 L57,56 L62,50"
-        android:strokeWidth="0" />
+    <group android:translateX="27" android:translateY="28" android:scaleX="2.25" android:scaleY="2.25">
+        <path
+            android:strokeColor="#FFFFFFFF" android:strokeWidth="1.9"
+            android:strokeLineCap="round" android:strokeLineJoin="round"
+            android:pathData="M3.6,4 h9.8 a1.6,1.6 0 0 1 1.6,1.6 v6.8 a1.6,1.6 0 0 1 -1.6,1.6 h-9.8 a1.6,1.6 0 0 1 -1.6,-1.6 v-6.8 a1.6,1.6 0 0 1 1.6,-1.6 z M5,18 h7 M18.2,7 h2.6 a1.2,1.2 0 0 1 1.2,1.2 v8.6 a1.2,1.2 0 0 1 -1.2,1.2 h-2.6 a1.2,1.2 0 0 1 -1.2,-1.2 v-8.6 a1.2,1.2 0 0 1 1.2,-1.2 z" />
+    </group>
 </vector>

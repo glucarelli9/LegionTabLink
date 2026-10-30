@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="tagline">Tu tablet como segundo monitor</string>
+    <string name="chip_connecting">Esperando la PC</string>
+    <string name="chip_connected">En vivo</string>
+    <string name="status_connecting">Conectando con tu PC…</string>
+    <string name="status_connected">¡Conectado!</string>
+    <string name="status_reconnecting">Reconectando…</string>
+    <string name="hint_connecting">Abrí GL ExtraScreen en la PC y tocá Iniciar servidor</string>
+    <string name="hint_connected">Iniciando la pantalla…</string>
+    <string name="how_title">Cómo conectar</string>
+    <string name="step1">Conectá la tablet a la PC con un cable USB</string>
+    <string name="step2">Abrí GL ExtraScreen en la PC</string>
+    <string name="step3">Tocá Iniciar servidor y la pantalla aparece acá</string>
+</resources>

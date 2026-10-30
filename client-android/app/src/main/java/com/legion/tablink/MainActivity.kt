@@ -18,6 +18,11 @@ class MainActivity : Activity()
     private lateinit var welcomeOverlay: View
     private lateinit var statusDot: View
     private lateinit var statusText: TextView
+    private lateinit var hintText: TextView
+    private lateinit var chipText: TextView
+    private lateinit var chip: View
+    private lateinit var scene: LinkSceneView
+    private lateinit var glow: GlowBackgroundView
     private lateinit var decoder: LowLatencyDecoder
     private lateinit var inputSender: InputSender
     private lateinit var streamClient: StreamClient
@@ -78,6 +83,17 @@ class MainActivity : Activity()
         welcomeOverlay = findViewById(R.id.welcomeOverlay)
         statusDot = findViewById(R.id.statusDot)
         statusText = findViewById(R.id.statusText)
+        hintText = findViewById(R.id.hintText)
+        chipText = findViewById(R.id.chipText)
+        chip = findViewById(R.id.chip)
+        scene = findViewById(R.id.scene)
+        glow = findViewById(R.id.glow)
+
+        if (resources.configuration.screenWidthDp < 600)
+        {
+            findViewById<View>(R.id.column).layoutParams.width = android.view.ViewGroup.LayoutParams.MATCH_PARENT
+        }
+        applyState(getString(R.string.status_connecting), connected = false)
 
         val metrics = resources.displayMetrics
         val tabletWidth = metrics.widthPixels.coerceAtLeast(1)
@@ -120,44 +136,65 @@ class MainActivity : Activity()
         super.onDestroy()
     }
 
+    private var wasConnected = false
+
     private fun showConnecting()
     {
         welcomeOverlay.visibility = View.VISIBLE
         captureView.visibility = View.INVISIBLE
-        statusText.text = getString(R.string.status_connecting)
-        setDotColor(getColor(R.color.dot_connecting))
+        val text = if (wasConnected) R.string.status_reconnecting else R.string.status_connecting
+        applyState(getString(text), connected = false)
         startPulse()
     }
 
     private fun showConnected()
     {
-        statusText.text = getString(R.string.status_connected)
-        setDotColor(getColor(R.color.dot_connected))
+        wasConnected = true
+        applyState(getString(R.string.status_connected), connected = true)
         pulseAnimator?.cancel()
         statusDot.alpha = 1f
-        // Brief delay then show the stream
+        // Let the connect animation play, then reveal the stream
         captureView.postDelayed({
             welcomeOverlay.visibility = View.GONE
             captureView.visibility = View.VISIBLE
-        }, 600)
+        }, 900)
     }
 
     private fun showDisconnected()
     {
         welcomeOverlay.visibility = View.VISIBLE
         captureView.visibility = View.INVISIBLE
-        statusText.text = getString(R.string.status_reconnecting)
-        setDotColor(getColor(R.color.dot_connecting))
+        val text = if (wasConnected) R.string.status_reconnecting else R.string.status_connecting
+        applyState(getString(text), connected = false)
         startPulse()
     }
 
-    private fun setDotColor(color: Int)
+    private var currentConnected: Boolean? = null
+
+    private fun applyState(status: String, connected: Boolean)
     {
-        val bg = statusDot.background
-        if (bg is GradientDrawable)
-        {
-            bg.setColor(color)
+        statusText.text = status
+        if (currentConnected == connected) return
+        currentConnected = connected
+
+        val color = getColor(if (connected) R.color.dot_connected else R.color.dot_connecting)
+        chipText.text = getString(if (connected) R.string.chip_connected else R.string.chip_connecting)
+        chipText.setTextColor(blendWithWhite(color, 0.3f))
+        hintText.text = getString(if (connected) R.string.hint_connected else R.string.hint_connecting)
+        (statusDot.background.mutate() as? GradientDrawable)?.setColor(color)
+        (chip.background.mutate() as? GradientDrawable)?.apply {
+            setColor(Palette.withAlpha(color, 0.12f))
+            setStroke((resources.displayMetrics.density).toInt().coerceAtLeast(1), Palette.withAlpha(color, 0.30f))
         }
+        scene.setConnected(connected)
+        glow.setConnected(connected)
+    }
+
+    private fun blendWithWhite(color: Int, amount: Float): Int
+    {
+        fun ch(c: Int) = (c + (255 - c) * amount).toInt()
+        return android.graphics.Color.rgb(ch(android.graphics.Color.red(color)),
+            ch(android.graphics.Color.green(color)), ch(android.graphics.Color.blue(color)))
     }
 
     private fun startPulse()

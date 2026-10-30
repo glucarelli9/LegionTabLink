@@ -1,6 +1,6 @@
 [Setup]
 AppName=GL ExtraScreen
-AppVersion=1.0
+AppVersion=1.1
 AppPublisher=Gianfranco Lucarelli
 AppPublisherURL=https://github.com/glucarelli9/LegionTabLink
 AppSupportURL=https://github.com/glucarelli9/LegionTabLink/issues
@@ -89,6 +89,9 @@ var
   AdbPath: String;
   ResultCode: Integer;
 begin
+  if CurStep = ssInstall then
+    Exec('taskkill.exe', '/F /IM GLExtraScreen-Server.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+
   if CurStep = ssPostInstall then
   begin
     AdbPath := ExpandConstant('{app}\adb.exe');
@@ -97,6 +100,12 @@ begin
     begin
       Exec(AdbPath, 'start-server', ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ResultCode);
       Exec(AdbPath, 'install -r "' + ApkPath + '"', ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ResultCode);
+      // An older build signed with a different key cannot be updated in place
+      if ResultCode <> 0 then
+      begin
+        Exec(AdbPath, 'uninstall com.legion.tablink', ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ResultCode);
+        Exec(AdbPath, 'install "' + ApkPath + '"', ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ResultCode);
+      end;
     end;
   end;
 end;

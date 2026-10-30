@@ -1,8 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">GL ExtraScreen</string>
-    <string name="subtitle">Wireless Second Monitor for Android</string>
-    <string name="status_connecting">Connecting to server…</string>
+    <string name="app_name" translatable="false">GL ExtraScreen</string>
+    <string name="tagline">Your tablet as a second monitor</string>
+    <string name="chip_connecting">Waiting for PC</string>
+    <string name="chip_connected">Live</string>
+    <string name="status_connecting">Connecting to your PC…</string>
     <string name="status_connected">Connected!</string>
     <string name="status_reconnecting">Reconnecting…</string>
+    <string name="hint_connecting">Open GL ExtraScreen on your PC and press Start server</string>
+    <string name="hint_connected">Starting the display…</string>
+    <string name="how_title">How to connect</string>
+    <string name="step1">Connect this tablet to the PC with a USB cable</string>
+    <string name="step2">Open GL ExtraScreen on the PC</string>
+    <string name="step3">Press Start server — the screen shows up here</string>
+    <string name="footer" translatable="false">v1.1 · Gianfranco Lucarelli</string>
 </resources>
