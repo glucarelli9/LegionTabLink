@@ -197,9 +197,77 @@ void PenTouchInjector::FlushFrame(bool pen, const Entry* entries, uint32_t count
     }
 }
 
-void PenTouchInjector::Inject(const LtlInputEventPayload& event)
+void PenTouchInjector::ReleaseAllTouches()
+{
+    m_entries.clear();
+    for (const auto& [pointerId, payload] : m_touchState)
+    {
+        m_entries.push_back(Entry{ payload, true, false });
+        m_rejectedTouches.insert(pointerId); // still resting on the glass
+    }
+    m_touchState.clear();
+    m_touchKnown.clear();
+    if (!m_entries.empty())
+        FlushFrame(false, m_entries.data(), static_cast<uint32_t>(m_entries.size()));
+}
+
+// Palm rejection: while the pen is near the screen (and for a short grace period after),
+// new finger contacts are ignored until they lift. Returns false if nothing is left to inject.
+bool PenTouchInjector::FilterPalm(LtlInputEventPayload& event)
+{
+    constexpr ULONGLONG GraceMs = 400;
+    const ULONGLONG now = ::GetTickCount64();
+    const uint32_t count = event.pointerCount > LTL_MAX_INPUT_POINTERS ? LTL_MAX_INPUT_POINTERS : event.pointerCount;
+
+    if (event.deviceKind == LtlInputDevicePen)
+    {
+        bool penInRange = false;
+        for (uint32_t i = 0; i < count; ++i)
+            penInRange |= event.pointers[i].pointerState != LtlPointerIdle;
+        penInRange &= event.action != LtlActionCancel && event.action != LtlActionHoverExit;
+        if (penInRange && !m_penNear && !m_touchState.empty())
+            ReleaseAllTouches();
+        m_penNear = penInRange;
+        m_penLastSeen = now;
+        return true;
+    }
+
+    if (event.action == LtlActionCancel)
+    {
+        m_rejectedTouches.clear();
+        return true;
+    }
+
+    const bool penActive = m_penNear || now - m_penLastSeen < GraceMs;
+    uint32_t kept = 0;
+    for (uint32_t i = 0; i < count; ++i)
+    {
+        const LtlPointerPayload& p = event.pointers[i];
+        if (m_rejectedTouches.contains(p.pointerId))
+        {
+            if (p.pointerState == LtlPointerIdle) m_rejectedTouches.erase(p.pointerId);
+            continue;
+        }
+        if (penActive && p.pointerState != LtlPointerIdle && !m_touchKnown.contains(p.pointerId))
+        {
+            m_rejectedTouches.insert(p.pointerId);
+            continue;
+        }
+        event.pointers[kept++] = p;
+    }
+    event.pointerCount = static_cast<uint8_t>(kept);
+    return kept > 0 || event.action == LtlActionCancel;
+}
+
+void PenTouchInjector::Inject(const LtlInputEventPayload& original)
 {
     if (m_penDevice == nullptr || m_touchDevice == nullptr)
+    {
+        return;
+    }
+
+    LtlInputEventPayload event = original;
+    if (!FilterPalm(event))
     {
         return;
     }

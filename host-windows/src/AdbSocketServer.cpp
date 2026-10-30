@@ -259,9 +259,32 @@ void AdbSocketServer::ListenLoopInput()
     }
 }
 
+AdbSocketServer::StreamConfig AdbSocketServer::GetConfig()
+{
+    std::lock_guard<std::mutex> lock(m_configLock);
+    return m_config;
+}
+
+void AdbSocketServer::UpdateStreamConfig(const StreamConfig& config)
+{
+    {
+        std::lock_guard<std::mutex> lock(m_configLock);
+        m_config = config;
+    }
+    m_resizePending.store(false);
+}
+
+bool AdbSocketServer::ConsumeResizeRequest(uint32_t& width, uint32_t& height)
+{
+    if (!m_resizePending.load()) return false;
+    width = m_requestedWidth.load();
+    height = m_requestedHeight.load();
+    return true;
+}
+
 void AdbSocketServer::HandleVideoClient(SOCKET client)
 {
-    const SOCKET previous = m_videoClient.exchange(client);
+    const SOCKET previous = m_videoClient.exchange(INVALID_SOCKET);
     if (previous != INVALID_SOCKET && previous != client)
     {
         ::closesocket(previous);
@@ -286,25 +309,48 @@ void AdbSocketServer::HandleVideoClient(SOCKET client)
         return;
     }
 
+    if (header.payloadSize >= sizeof(LtlHelloPayload))
+    {
+        LtlHelloPayload hello{};
+        std::memcpy(&hello, helloPayload, sizeof(hello));
+        const StreamConfig current = GetConfig();
+        const bool wantPortrait = hello.maxHeight > hello.maxWidth;
+        const bool havePortrait = current.height > current.width;
+        if (hello.maxWidth > 0 && hello.maxHeight > 0 && wantPortrait != havePortrait)
+        {
+            std::fprintf(stderr, "[tcp] tablet rotated -> %s, rebuilding stream\n", wantPortrait ? "portrait" : "landscape");
+            m_requestedWidth.store(hello.maxWidth);
+            m_requestedHeight.store(hello.maxHeight);
+            m_resizePending.store(true);
+            for (int waited = 0; m_resizePending.load() && m_running.load() && waited < 15000; waited += 20)
+            {
+                ::Sleep(20);
+            }
+            m_resizePending.store(false);
+        }
+    }
+
+    const StreamConfig config = GetConfig();
     LtlConfigPayload configPayload{};
-    configPayload.width = static_cast<uint16_t>(m_config.width);
-    configPayload.height = static_cast<uint16_t>(m_config.height);
-    configPayload.fps = static_cast<uint16_t>(m_config.fps);
-    configPayload.bitrateMbps = static_cast<uint16_t>(m_config.bitrateMbps);
-    configPayload.codec = m_config.codec;
+    configPayload.width = static_cast<uint16_t>(config.width);
+    configPayload.height = static_cast<uint16_t>(config.height);
+    configPayload.fps = static_cast<uint16_t>(config.fps);
+    configPayload.bitrateMbps = static_cast<uint16_t>(config.bitrateMbps);
+    configPayload.codec = config.codec;
     if (!SendPacket(client, LtlPacketConfig, &configPayload, sizeof(configPayload)))
     {
-        DropVideoClient(client);
+        ::closesocket(client);
         return;
     }
 
+    m_videoClient.store(client);
     m_idrPending.store(true);
     std::fprintf(stderr, "[tcp] video client connected (config %ux%u@%u %umbps codec=%u)\n",
-        static_cast<unsigned>(m_config.width),
-        static_cast<unsigned>(m_config.height),
-        static_cast<unsigned>(m_config.fps),
-        static_cast<unsigned>(m_config.bitrateMbps),
-        static_cast<unsigned>(m_config.codec));
+        static_cast<unsigned>(config.width),
+        static_cast<unsigned>(config.height),
+        static_cast<unsigned>(config.fps),
+        static_cast<unsigned>(config.bitrateMbps),
+        static_cast<unsigned>(config.codec));
 
     while (m_running.load())
     {

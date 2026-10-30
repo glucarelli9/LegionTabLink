@@ -7,11 +7,12 @@
     <string name="status_connecting">Connecting to your PC…</string>
     <string name="status_connected">Connected!</string>
     <string name="status_reconnecting">Reconnecting…</string>
+    <string name="status_rotating">Rotating the screen…</string>
     <string name="hint_connecting">Open GL ExtraScreen on your PC and press Start server</string>
     <string name="hint_connected">Starting the display…</string>
     <string name="how_title">How to connect</string>
     <string name="step1">Connect this tablet to the PC with a USB cable</string>
     <string name="step2">Open GL ExtraScreen on the PC</string>
     <string name="step3">Press Start server — the screen shows up here</string>
-    <string name="footer" translatable="false">v1.1 · Gianfranco Lucarelli</string>
+    <string name="footer" translatable="false">v1.2 · Gianfranco Lucarelli</string>
 </resources>

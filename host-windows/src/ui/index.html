@@ -88,12 +88,22 @@ body:not([data-kind="idle"]) .dot{animation:pulse 1.8s ease-out infinite}
 .cta.stop:hover{background:rgba(244,63,94,.16);filter:none}
 .cta[disabled]{opacity:.55;pointer-events:none}
 
-/* stats */
-.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
-.stat{padding:12px 14px}
-.stat .k{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.7px;font-weight:600}
-.stat .v{font-size:17px;font-weight:700;margin-top:4px;font-variant-numeric:tabular-nums}
-.stat .v small{font-size:11.5px;color:var(--sub);font-weight:600;margin-left:2px}
+/* meta line */
+.meta{display:flex;gap:6px;flex-wrap:wrap;justify-content:center;margin-top:14px;position:relative}
+.meta span{font-size:11.5px;font-weight:600;color:var(--sub);padding:4px 9px;border-radius:8px;background:rgba(255,255,255,.04);font-variant-numeric:tabular-nums}
+
+/* quality */
+.quality{padding:12px}
+.qhead{display:flex;align-items:baseline;justify-content:space-between;padding:2px 4px 10px;font-size:12px;font-weight:600;color:var(--sub);text-transform:uppercase;letter-spacing:.7px}
+.qnote{font-size:11px;text-transform:none;letter-spacing:0;color:var(--dim);font-weight:500}
+.seg{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;padding:4px;border-radius:12px;background:rgba(0,0,0,.25)}
+.seg button{all:unset;cursor:pointer;text-align:center;padding:9px 6px;border-radius:9px;transition:background .2s,box-shadow .2s}
+.seg button b{display:block;font-size:13px;font-weight:650;color:var(--sub);transition:color .2s}
+.seg button span{display:block;font-size:11px;color:var(--dim);margin-top:2px}
+.seg button:hover b{color:var(--text)}
+.seg button.on{background:linear-gradient(135deg,color-mix(in srgb,var(--accent) 30%,transparent),color-mix(in srgb,var(--accent2) 22%,transparent));box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--accent) 45%,transparent)}
+.seg button.on b{color:#fff} .seg button.on span{color:#c9c8ff}
+.seg button:focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
 
 /* collapsibles */
 details{overflow:hidden}
@@ -174,14 +184,18 @@ footer a{color:var(--sub);text-decoration:none;cursor:pointer} footer a:hover{co
     <div class="chip"><span class="dot"></span><span id="chip"></span></div>
     <div class="status" id="status"></div>
     <div class="hint" id="hint"></div>
+    <div class="meta" id="meta"></div>
   </section>
 
   <button class="cta fade" id="cta"></button>
 
-  <section class="stats fade">
-    <div class="card stat"><div class="k" data-i="res"></div><div class="v" id="res">—</div></div>
-    <div class="card stat"><div class="k">FPS</div><div class="v" id="fps">—</div></div>
-    <div class="card stat"><div class="k" id="k3"></div><div class="v" id="v3">—</div></div>
+  <section class="card quality fade">
+    <div class="qhead"><span data-i="quality"></span><span class="qnote" id="qnote"></span></div>
+    <div class="seg" id="seg" role="radiogroup">
+      <button data-q="0" role="radio"><b data-i="q0"></b><span>90 FPS</span></button>
+      <button data-q="1" role="radio"><b data-i="q1"></b><span>60 FPS</span></button>
+      <button data-q="2" role="radio"><b data-i="q2"></b><span>60 FPS · HD</span></button>
+    </div>
   </section>
 
   <details class="card fade" id="setup">
@@ -204,12 +218,13 @@ footer a{color:var(--sub);text-decoration:none;cursor:pointer} footer a:hover{co
     <div class="logtools"><button class="ghost" id="copy" data-i="copy"></button><button class="ghost" id="clear" data-i="clear"></button></div>
   </details>
 
-  <footer><span>v1.1 · Gianfranco Lucarelli</span><a id="gh">GitHub ↗</a></footer>
+  <footer><span>v1.2 · Gianfranco Lucarelli</span><a id="gh">GitHub ↗</a></footer>
 </div>
 
 <script>
 const T = {
-  es:{tagline:"Tu tablet como segundo monitor",res:"Resolución",uptime:"Conectado",bitrate:"Bitrate",
+  es:{tagline:"Tu tablet como segundo monitor",quality:"Calidad",q0:"Fluido",q1:"Equilibrado",q2:"Nítido",
+      qIdle:"Se usa al iniciar",qLive:"Cambiarla reinicia la transmisión",
       start:"Iniciar servidor",stop:"Detener servidor",setupTitle:"Configurar la tablet (primera vez)",log:"Registro",copy:"Copiar",clear:"Limpiar",copied:"Copiado",
       chip:{idle:"Inactivo",warn:"Preparando",ok:"Esperando tablet",live:"En vivo"},
       title:{idle:"Listo para conectar"},
@@ -218,7 +233,8 @@ const T = {
              ["Activá la Depuración USB","Ajustes → Opciones de desarrollador → Depuración USB"],
              ["Conectá la tablet con el cable USB","Usá un cable de datos, no solo de carga"],
              ["Aceptá el aviso en la tablet","Marcá “Permitir siempre desde esta computadora”"]]},
-  en:{tagline:"Your tablet as a second monitor",res:"Resolution",uptime:"Connected",bitrate:"Bitrate",
+  en:{tagline:"Your tablet as a second monitor",quality:"Quality",q0:"Smooth",q1:"Balanced",q2:"Sharp",
+      qIdle:"Used when the server starts",qLive:"Changing it restarts the stream",
       start:"Start server",stop:"Stop server",setupTitle:"Set up the tablet (first time)",log:"Log",copy:"Copy",clear:"Clear",copied:"Copied",
       chip:{idle:"Idle",warn:"Preparing",ok:"Waiting for tablet",live:"Live"},
       title:{idle:"Ready to connect"},
@@ -229,7 +245,7 @@ const T = {
              ["Accept the prompt on the tablet","Tick “Always allow from this computer”"]]}
 };
 const COLORS = {idle:"var(--idle)",warn:"var(--warn)",ok:"var(--accent)",live:"var(--ok)"};
-const S = {lang:"es",running:false,kind:"idle",text:"",w:0,h:0,fps:0,br:0,liveSince:0,lines:0};
+const S = {lang:"es",running:false,kind:"idle",text:"",w:0,h:0,fps:0,br:0,q:1,liveSince:0,lines:0};
 const $ = id => document.getElementById(id);
 const host = window.chrome && window.chrome.webview;
 const send = m => host && host.postMessage(m);
@@ -251,23 +267,25 @@ function render(){
     ? '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2.5"/></svg>'
     : '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l11-6.5a1 1 0 0 0 0-1.72l-11-6.5A1 1 0 0 0 8 5.5z"/></svg>')
     + `<span>${S.running ? L.stop : L.start}</span>`;
-  $("res").innerHTML = S.w ? `${S.w}<small>×</small>${S.h}` : "—";
-  $("fps").textContent = S.fps || "—";
+  document.querySelectorAll(".seg button").forEach(b => {
+    const on = Number(b.dataset.q) === S.q; b.classList.toggle("on", on); b.setAttribute("aria-checked", on); });
+  $("qnote").textContent = S.running ? L.qLive : L.qIdle;
   $("steps").innerHTML = L.steps.map((s,i) =>
     `<div class="step"><div class="n">${i+1}</div><div><b>${s[0]}</b><span>${s[1]}</span></div></div>`).join("");
   tick();
 }
 function tick(){
-  const L = t();
+  const parts = [];
+  if (S.w) parts.push(`${S.w} × ${S.h}`);
+  if (S.fps) parts.push(`${S.fps} FPS`);
+  if (S.br) parts.push(`${S.br} Mbps`);
   if (S.kind === "live" && S.liveSince){
     const s = Math.floor((Date.now() - S.liveSince)/1000);
-    const mm = String(Math.floor(s/60)).padStart(2,"0"), ss = String(s%60).padStart(2,"0");
-    $("k3").textContent = L.uptime;
-    $("v3").textContent = s >= 3600 ? `${Math.floor(s/3600)}h ${String(Math.floor(s/60)%60).padStart(2,"0")}m` : `${mm}:${ss}`;
-  } else {
-    $("k3").textContent = L.bitrate;
-    $("v3").innerHTML = S.br ? `${S.br}<small>Mbps</small>` : "—";
+    const mm = String(Math.floor(s/60)%60).padStart(2,"0"), ss = String(s%60).padStart(2,"0");
+    parts.push(s >= 3600 ? `${Math.floor(s/3600)}h ${mm}m` : `${mm}:${ss}`);
   }
+  const html = parts.map(p => `<span>${p}</span>`).join("");
+  if ($("meta").innerHTML !== html) $("meta").innerHTML = html;
 }
 setInterval(tick, 1000);
 
@@ -288,7 +306,7 @@ function addLog(line){
 
 if (host) host.addEventListener("message", e => {
   const m = e.data;
-  if (m.t === "state"){ Object.assign(S, {lang:m.lang, running:m.running, w:m.w, h:m.h, fps:m.fps, br:m.br});
+  if (m.t === "state"){ Object.assign(S, {lang:m.lang, running:m.running, w:m.w, h:m.h, fps:m.fps, br:m.br, q:m.q});
     if (!m.running){ S.kind = "idle"; S.text = m.text || ""; } render(); }
   else if (m.t === "status"){
     if (m.kind === "live" && S.kind !== "live") S.liveSince = Date.now();
@@ -299,6 +317,8 @@ if (host) host.addEventListener("message", e => {
 $("cta").onclick = () => { $("cta").disabled = true; setTimeout(() => $("cta").disabled = false, 900); send("toggle"); };
 document.querySelectorAll(".lang button").forEach(b => b.onclick = () => { if (b.dataset.lang !== S.lang) send("lang:" + b.dataset.lang); });
 $("gh").onclick = () => send("open:github");
+document.querySelectorAll(".seg button").forEach(b => b.onclick = () => {
+  const q = Number(b.dataset.q); if (q === S.q) return; S.q = q; render(); send("quality:" + q); });
 $("clear").onclick = e => { e.preventDefault(); $("log").innerHTML = ""; S.lines = 0; $("logcount").textContent = ""; };
 $("copy").onclick = e => { e.preventDefault(); send("copy:" + $("log").innerText);
   const b = $("copy"); b.textContent = t().copied; setTimeout(() => b.textContent = t().copy, 1200); };

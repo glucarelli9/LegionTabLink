@@ -95,9 +95,8 @@ class MainActivity : Activity()
         }
         applyState(getString(R.string.status_connecting), connected = false)
 
-        val metrics = resources.displayMetrics
-        val tabletWidth = metrics.widthPixels.coerceAtLeast(1)
-        val tabletHeight = metrics.heightPixels.coerceAtLeast(1)
+        val (tabletWidth, tabletHeight) = screenSize()
+        lastPortrait = tabletHeight > tabletWidth
 
         decoder = LowLatencyDecoder(keyframeRequester)
         inputSender = InputSender()
@@ -137,9 +136,44 @@ class MainActivity : Activity()
     }
 
     private var wasConnected = false
+    private var lastPortrait = false
+    private var rotating = false
+    private val rotationTimeout = Runnable { if (rotating) { rotating = false; showConnecting() } }
+
+    private fun screenSize(): Pair<Int, Int>
+    {
+        val bounds = windowManager.currentWindowMetrics.bounds
+        return Pair(bounds.width().coerceAtLeast(1), bounds.height().coerceAtLeast(1))
+    }
+
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration)
+    {
+        super.onConfigurationChanged(newConfig)
+        val (width, height) = screenSize()
+        val portrait = height > width
+        if (portrait == lastPortrait) return
+        lastPortrait = portrait
+        applyImmersiveChrome()
+        if (wasConnected)
+        {
+            rotating = true
+            showRotating()
+            captureView.removeCallbacks(rotationTimeout)
+            captureView.postDelayed(rotationTimeout, 10000)
+        }
+        streamClient.resize(width, height)
+    }
+
+    private fun showRotating()
+    {
+        welcomeOverlay.visibility = View.VISIBLE
+        captureView.visibility = View.INVISIBLE
+        applyState(getString(R.string.status_rotating), connected = true)
+    }
 
     private fun showConnecting()
     {
+        if (rotating) { showRotating(); return }
         welcomeOverlay.visibility = View.VISIBLE
         captureView.visibility = View.INVISIBLE
         val text = if (wasConnected) R.string.status_reconnecting else R.string.status_connecting
@@ -149,6 +183,9 @@ class MainActivity : Activity()
 
     private fun showConnected()
     {
+        val afterRotation = rotating
+        rotating = false
+        captureView.removeCallbacks(rotationTimeout)
         wasConnected = true
         applyState(getString(R.string.status_connected), connected = true)
         pulseAnimator?.cancel()
@@ -157,11 +194,12 @@ class MainActivity : Activity()
         captureView.postDelayed({
             welcomeOverlay.visibility = View.GONE
             captureView.visibility = View.VISIBLE
-        }, 900)
+        }, if (afterRotation) 250 else 900)
     }
 
     private fun showDisconnected()
     {
+        if (rotating) { showRotating(); return }
         welcomeOverlay.visibility = View.VISIBLE
         captureView.visibility = View.INVISIBLE
         val text = if (wasConnected) R.string.status_reconnecting else R.string.status_connecting

@@ -32,6 +32,8 @@ private:
     };
 
     void FlushFrame(bool pen, const Entry* entries, uint32_t count);
+    bool FilterPalm(LtlInputEventPayload& event);
+    void ReleaseAllTouches();
     void BuildPointerEntry(bool pen, bool first, const Entry& entry, POINTER_TYPE_INFO& info) const;
 
     void* m_penDevice = nullptr;
@@ -41,6 +43,9 @@ private:
     std::unordered_map<uint8_t, LtlPointerPayload> m_touchState;
     std::unordered_set<uint8_t> m_penKnown;
     std::unordered_set<uint8_t> m_touchKnown;
+    std::unordered_set<uint8_t> m_rejectedTouches;
+    bool m_penNear = false;
+    ULONGLONG m_penLastSeen = 0;
     std::vector<Entry> m_entries;
     std::vector<POINTER_TYPE_INFO> m_frame;
 };

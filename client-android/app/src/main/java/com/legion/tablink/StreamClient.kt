@@ -65,8 +65,8 @@ interface ConnectionListener
 
 class StreamClient(
     private val decoder: LowLatencyDecoder,
-    private val tabletMaxWidth: Int,
-    private val tabletMaxHeight: Int,
+    @Volatile private var tabletMaxWidth: Int,
+    @Volatile private var tabletMaxHeight: Int,
     private val host: String = WireProtocol.Host,
     private val videoPort: Int = WireProtocol.VideoTcpPort
 )
@@ -80,6 +80,16 @@ class StreamClient(
     var connectionListener: ConnectionListener? = null
     private val running = AtomicBoolean(false)
     private var reader: Thread? = null
+    @Volatile private var activeSocket: Socket? = null
+
+    /** Reconnect with a new size; the server switches the virtual display orientation on the next Hello. */
+    fun resize(width: Int, height: Int)
+    {
+        if (width == tabletMaxWidth && height == tabletMaxHeight) return
+        tabletMaxWidth = width
+        tabletMaxHeight = height
+        try { activeSocket?.close() } catch (ignored: IOException) { }
+    }
 
     fun start()
     {
@@ -122,6 +132,7 @@ class StreamClient(
         {
             connectionListener?.onConnecting()
             val socket = Socket()
+            activeSocket = socket
             try
             {
                 Log.d("LTL", "Connecting to $host:$videoPort...")
@@ -139,6 +150,7 @@ class StreamClient(
             }
             finally
             {
+                activeSocket = null
                 connectionListener?.onDisconnected()
                 try
                 {

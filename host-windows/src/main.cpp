@@ -270,11 +270,13 @@ namespace VddDriver
     // We write slot 0 with the tablet's native resolution; any
     // previous value is overwritten.  The display must be added AFTER
     // this call so the driver picks up the new mode.
-    static bool RegisterCustomMode(DWORD w, DWORD h, DWORD hz)
+    static bool RegisterCustomMode(int slot, DWORD w, DWORD h, DWORD hz)
     {
         HKEY hKey = nullptr;
+        char keyPath[64];
+        std::snprintf(keyPath, sizeof(keyPath), "SOFTWARE\\Parsec\\vdd\\%d", slot);
         LONG rc = ::RegCreateKeyExA(HKEY_LOCAL_MACHINE,
-            "SOFTWARE\\Parsec\\vdd\\0",
+            keyPath,
             0, nullptr, REG_OPTION_NON_VOLATILE,
             KEY_SET_VALUE | KEY_WOW64_64KEY,
             nullptr, &hKey, nullptr);
@@ -293,7 +295,7 @@ namespace VddDriver
             reinterpret_cast<const BYTE*>(&hz), sizeof(DWORD));
         ::RegCloseKey(hKey);
         std::fprintf(stderr, "[vdd] Registered custom mode %lux%lu @%luHz "
-            "in registry slot 0\n", w, h, hz);
+            "in registry slot %d\n", w, h, hz, slot);
         return true;
     }
 }
@@ -489,6 +491,33 @@ static DWORD g_height  = DefaultHeight;
 static DWORD g_fps     = DefaultFps;
 static DWORD g_bitrate = DefaultBitrateMbps;
 
+// Quality presets: Smooth / Balanced / Sharp
+struct QualityPreset { DWORD fps; DWORD bitrateMbps; };
+static constexpr QualityPreset kQualityPresets[] = { {90, 35}, {60, 30}, {60, 50} };
+static DWORD g_quality = 1;
+static bool  g_restartPending = false;
+static constexpr const wchar_t* kSettingsKey = L"Software\\GLExtraScreen";
+
+static void ApplyQuality(DWORD q)
+{
+    g_quality = q < 3 ? q : 1;
+    g_fps     = kQualityPresets[g_quality].fps;
+    g_bitrate = kQualityPresets[g_quality].bitrateMbps;
+}
+
+static void LoadQuality()
+{
+    DWORD value = 1, size = sizeof(value);
+    if (::RegGetValueW(HKEY_CURRENT_USER, kSettingsKey, L"Quality", RRF_RT_REG_DWORD, nullptr, &value, &size) != ERROR_SUCCESS)
+        value = 1;
+    ApplyQuality(value);
+}
+
+static void SaveQuality()
+{
+    ::RegSetKeyValueW(HKEY_CURRENT_USER, kSettingsKey, L"Quality", REG_DWORD, &g_quality, sizeof(g_quality));
+}
+
 // ═══════════════════════════════════════════════════════════════════
 //  Stderr → GUI Log Redirect
 // ═══════════════════════════════════════════════════════════════════
@@ -607,9 +636,9 @@ static void WebPost(const std::wstring& json)
 static void WebSendState()
 {
     wchar_t buf[256];
-    swprintf(buf, 256, L"{\"t\":\"state\",\"lang\":\"%s\",\"running\":%s,\"w\":%lu,\"h\":%lu,\"fps\":%lu,\"br\":%lu}",
+    swprintf(buf, 256, L"{\"t\":\"state\",\"lang\":\"%s\",\"running\":%s,\"w\":%lu,\"h\":%lu,\"fps\":%lu,\"br\":%lu,\"q\":%lu}",
         g_isSpanish ? L"es" : L"en", g_serverRunning.load() ? L"true" : L"false",
-        g_width, g_height, g_fps, g_bitrate);
+        g_width, g_height, g_fps, g_bitrate, g_quality);
     WebPost(buf);
 }
 
@@ -667,6 +696,20 @@ static void HandleWebMessage(const std::wstring& msg)
     {
         if ((msg == L"lang:es") != g_isSpanish)
             ::SendMessageW(g_mainWnd, WM_COMMAND, MAKEWPARAM(IDC_BTN_LANG, BN_CLICKED), 0);
+    }
+    else if (msg.size() == 9 && msg.rfind(L"quality:", 0) == 0)
+    {
+        DWORD q = static_cast<DWORD>(msg[8] - L'0');
+        if (q > 2 || q == g_quality) return;
+        ApplyQuality(q);
+        SaveQuality();
+        std::fprintf(stderr, "[ui] Quality -> %lu FPS / %lu Mbps\n", g_fps, g_bitrate);
+        if (g_serverRunning.load() && !g_stopRequested.load())
+        {
+            g_restartPending = true;
+            ::SendMessageW(g_mainWnd, WM_COMMAND, MAKEWPARAM(IDC_BTN_START, BN_CLICKED), 0);
+        }
+        WebSendState();
     }
     else if (msg == L"open:github")
     {
@@ -819,13 +862,13 @@ static bool ConfigureVddPosition(const std::wstring& vddName,
 }
 
 // Check whether a specific resolution is already available on a display
-static bool DisplayModeExists(const std::wstring& deviceName, DWORD w, DWORD h)
+static bool DisplayModeExists(const std::wstring& deviceName, DWORD w, DWORD h, DWORD hz)
 {
     DEVMODEW dm{};
     dm.dmSize = sizeof(dm);
     for (DWORD i = 0; ::EnumDisplaySettingsW(deviceName.c_str(), i, &dm); ++i)
     {
-        if (dm.dmPelsWidth == w && dm.dmPelsHeight == h)
+        if (dm.dmPelsWidth == w && dm.dmPelsHeight == h && dm.dmDisplayFrequency == hz)
             return true;
         dm.dmSize = sizeof(dm);
     }
@@ -960,18 +1003,19 @@ static void ServerMain()
     }
     std::fprintf(stderr, "[vdd] Appeared as %ls\n", vddName.c_str());
 
-    // Check if the target resolution already exists as a VDD mode
-    if (!DisplayModeExists(vddName, w, h))
+    // Both orientations must exist so the tablet can rotate without re-creating the display
+    if (!DisplayModeExists(vddName, w, h, fps) || !DisplayModeExists(vddName, h, w, fps))
     {
-        std::fprintf(stderr, "[vdd] Resolution %lux%lu not available "
-            "— registering custom mode...\n", w, h);
+        std::fprintf(stderr, "[vdd] Modes %lux%lu / %lux%lu @%lu not available "
+            "— registering custom modes...\n", w, h, h, w, fps);
 
-        // Remove the display, register custom mode, re-add
+        // Remove the display, register custom modes, re-add
         VddDriver::RemoveDisplay(g_vddDevice, g_vddDisplayIdx);
         g_vddDisplayIdx = -1;
         ::Sleep(500);
 
-        VddDriver::RegisterCustomMode(w, h, fps);
+        VddDriver::RegisterCustomMode(0, w, h, fps);
+        VddDriver::RegisterCustomMode(1, h, w, fps);
 
         g_vddDisplayIdx = VddDriver::AddDisplay(g_vddDevice);
         if (g_vddDisplayIdx < 0)
@@ -1121,8 +1165,57 @@ static void ServerMain()
         return true;
     };
 
+    // Switch the virtual display between landscape/portrait in place and rebuild capture + encoder.
+    auto rotateTo = [&](uint32_t reqW, uint32_t reqH) -> bool {
+        const DWORD longSide = w > h ? w : h, shortSide = w > h ? h : w;
+        const bool portrait = reqH > reqW;
+        const DWORD nw = portrait ? shortSide : longSide;
+        const DWORD nh = portrait ? longSide : shortSide;
+        std::fprintf(stderr, "[rotate] Switching virtual display to %lux%lu\n", nw, nh);
+
+        encoder->Shutdown();
+        encoder.reset();
+        capture.Stop();
+        ConfigureVddPosition(vddName, nw, nh, fps);
+
+        bool ok = false;
+        for (int attempt = 0; attempt < 24 && !g_stopRequested; ++attempt)
+        {
+            ::Sleep(250);
+            if (capture.Start(nw, nh, preferDev) && capture.Width() == nw && capture.Height() == nh) { ok = true; break; }
+            capture.Stop();
+        }
+        if (!ok && !capture.Start(nw, nh, preferDev))
+        {
+            std::fprintf(stderr, "[rotate] Capture could not restart\n");
+            return false;
+        }
+        encoder = CreateEncoderForAdapterVendor(capture.VendorId(), capture.Device(),
+            capture.Width(), capture.Height(), fps, br * 1000u * 1000u);
+        if (!encoder)
+        {
+            std::fprintf(stderr, "[rotate] Encoder could not restart\n");
+            return false;
+        }
+        capture.GetMonitorRect(monRect);
+        injector.UpdateBounds(monRect);
+        cfg.width = capture.Width();
+        cfg.height = capture.Height();
+        server.UpdateStreamConfig(cfg);
+        sinceIdr = 0;
+        std::fprintf(stderr, "[rotate] Done: %ux%u\n", capture.Width(), capture.Height());
+        return true;
+    };
+
     while (!g_stopRequested.load())
     {
+        uint32_t reqW = 0, reqH = 0;
+        if (server.ConsumeResizeRequest(reqW, reqH) && !rotateTo(reqW, reqH))
+        {
+            g_stopRequested = true;
+            break;
+        }
+
         if (!server.IsVideoConnected())
         {
             if (prevConn) {
@@ -1186,7 +1279,7 @@ static void ServerMain()
     std::fprintf(stderr, "[server] Shutting down...\n");
     server.Stop();
     injector.Stop();
-    encoder->Shutdown();
+    if (encoder) encoder->Shutdown();
     capture.Stop();
     ::WSACleanup();
     finish();
@@ -1585,6 +1678,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         ::EnableWindow(g_btnStart, TRUE);
         if (!running) SetStatus(g_lang->ready, Theme::DotIdle);
         WebSendState();
+        if (!running && g_restartPending)
+        {
+            g_restartPending = false;
+            ::SendMessageW(hwnd, WM_COMMAND, MAKEWPARAM(IDC_BTN_START, BN_CLICKED), 0);
+        }
         return 0;
     }
 
@@ -1629,6 +1727,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow)
     // ── GDI+ init ──
     Gdiplus::GdiplusStartupInput gdipInput;
     Gdiplus::GdiplusStartup(&g_gdipToken, &gdipInput, nullptr);
+
+    LoadQuality();
 
     // CLI overrides
     for (int i = 1; i < __argc; ++i)
