@@ -66,17 +66,21 @@ namespace
             && desc.DesktopCoordinates.bottom - desc.DesktopCoordinates.top == static_cast<LONG>(height);
     }
 
-    bool NameHintsVirtualDisplay(const DXGI_OUTPUT_DESC& desc)
+    bool ContainsAnyHint(const std::string& text)
     {
-        std::string lower = ToAscii(desc.DeviceName);
-        for (char& character : lower)
-        {
-            const unsigned char raw = static_cast<unsigned char>(character);
-            character = static_cast<char>(std::tolower(raw));
-        }
+        std::string lower = text;
+        for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
         return lower.find("virtual") != std::string::npos
+            || lower.find("parsec") != std::string::npos
             || lower.find("vdd") != std::string::npos
             || lower.find("mtt") != std::string::npos;
+    }
+
+    bool NameHintsVirtualDisplay(const DXGI_OUTPUT_DESC& desc, const DXGI_ADAPTER_DESC1& adapterDesc)
+    {
+        if (ContainsAnyHint(ToAscii(desc.DeviceName))) return true;
+        if (ContainsAnyHint(ToAscii(adapterDesc.Description))) return true;
+        return false;
     }
 }
 
@@ -135,28 +139,28 @@ bool DxgiCapture::Start(uint32_t expectedWidth, uint32_t expectedHeight)
             candidate.desc = desc;
             candidate.adapterDesc = adapterDesc;
             candidate.isPrimary = IsPrimaryMonitor(desc.DesktopCoordinates);
-            candidate.nameMatches = NameHintsVirtualDisplay(desc);
+            candidate.nameMatches = NameHintsVirtualDisplay(desc, adapterDesc);
             candidate.resolutionMatches = AnyDeskRectangleMatches(desc, expectedWidth, expectedHeight);
-            if (!candidate.resolutionMatches)
-            {
-                continue;
-            }
             candidates.push_back(std::move(candidate));
         }
     }
 
     if (candidates.empty())
     {
-        LogLine("[dxgi] no attached output matches the requested virtual display resolution");
+        LogLine("[dxgi] no attached outputs found");
         return false;
     }
 
     OutputCandidate* best = &candidates.front();
     for (OutputCandidate& candidate : candidates)
     {
-        const int score = static_cast<int>(candidate.nameMatches) * 2 + static_cast<int>(candidate.resolutionMatches) - static_cast<int>(candidate.isPrimary);
-        const int bestScore = static_cast<int>(best->nameMatches) * 2 + static_cast<int>(best->resolutionMatches) - static_cast<int>(best->isPrimary);
-        if (score > bestScore)
+        // Prefer: resolution match (4) > name hint (2) > non-primary (1)
+        auto score = [](const OutputCandidate& c) {
+            return static_cast<int>(c.resolutionMatches) * 4
+                 + static_cast<int>(c.nameMatches) * 2
+                 + (c.isPrimary ? 0 : 1);
+        };
+        if (score(candidate) > score(*best))
         {
             best = &candidate;
         }

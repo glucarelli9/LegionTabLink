@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">GL ExtraScreen</string>
+    <string name="subtitle">Wireless Second Monitor for Android</string>
+    <string name="status_connecting">Connecting to server…</string>
+    <string name="status_connected">Connected!</string>
+    <string name="status_reconnecting">Reconnecting…</string>
+</resources>

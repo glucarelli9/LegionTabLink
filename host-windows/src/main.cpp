@@ -6,8 +6,10 @@
 
 #include <cstdio>
 #include <cstring>
+#include <string>
 #include <vector>
 #include <windows.h>
+#include <shellapi.h>
 
 namespace
 {
@@ -16,14 +18,128 @@ namespace
     constexpr DWORD DefaultFps = 30;
     constexpr DWORD DefaultBitrateMbps = 20;
 
+    // ── ADB management ──────────────────────────────────────────────
+
+    std::string RunCommand(const std::string& cmd)
+    {
+        std::string result;
+        FILE* pipe = ::_popen(cmd.c_str(), "r");
+        if (!pipe) return result;
+        char buf[256];
+        while (std::fgets(buf, sizeof(buf), pipe))
+            result += buf;
+        ::_pclose(pipe);
+        // trim trailing whitespace
+        while (!result.empty() && (result.back() == '\n' || result.back() == '\r' || result.back() == ' '))
+            result.pop_back();
+        return result;
+    }
+
+    bool FileExists(const std::string& path)
+    {
+        return ::GetFileAttributesA(path.c_str()) != INVALID_FILE_ATTRIBUTES;
+    }
+
+    std::string FindAdbPath()
+    {
+        // 1. On PATH
+        auto found = RunCommand("where adb.exe 2>nul");
+        if (!found.empty())
+        {
+            // 'where' may return multiple lines; take the first
+            auto nl = found.find('\n');
+            if (nl != std::string::npos) found.resize(nl);
+            while (!found.empty() && (found.back() == '\r' || found.back() == ' ')) found.pop_back();
+            if (FileExists(found)) return found;
+        }
+        // 2. Known location
+        const char* knownPaths[] = {
+            "C:\\Users\\Gian\\platform-tools\\platform-tools\\adb.exe",
+            nullptr // LOCALAPPDATA placeholder filled below
+        };
+        for (auto p = knownPaths; *p; ++p)
+            if (FileExists(*p)) return *p;
+
+        // 3. %LOCALAPPDATA%\Android\Sdk\platform-tools
+        char localAppData[MAX_PATH]{};
+        if (::GetEnvironmentVariableA("LOCALAPPDATA", localAppData, MAX_PATH) > 0)
+        {
+            std::string sdkAdb = std::string(localAppData) + "\\Android\\Sdk\\platform-tools\\adb.exe";
+            if (FileExists(sdkAdb)) return sdkAdb;
+        }
+        // 4. Same directory as this exe
+        char exePath[MAX_PATH]{};
+        if (::GetModuleFileNameA(nullptr, exePath, MAX_PATH) > 0)
+        {
+            std::string dir(exePath);
+            auto slash = dir.find_last_of("\\/");
+            if (slash != std::string::npos) dir.resize(slash + 1);
+            std::string beside = dir + "adb.exe";
+            if (FileExists(beside)) return beside;
+        }
+        return {};
+    }
+
+    bool RunAdb(const std::string& adbPath, const std::string& args)
+    {
+        std::string cmd = "\"" + adbPath + "\" " + args + " 2>nul";
+        int rc = ::system(cmd.c_str());
+        return rc == 0;
+    }
+
+    std::string RunAdbOutput(const std::string& adbPath, const std::string& args)
+    {
+        std::string cmd = "\"" + adbPath + "\" " + args + " 2>nul";
+        return RunCommand(cmd);
+    }
+
+    bool SetupAdbTunnels(const std::string& adbPath)
+    {
+        std::fprintf(stderr, "[server] Starting ADB server...\n");
+        RunAdb(adbPath, "kill-server");
+        ::Sleep(1500);
+        RunAdb(adbPath, "start-server");
+        ::Sleep(1000);
+
+        std::fprintf(stderr, "[server] Looking for connected tablets...\n");
+        auto devices = RunAdbOutput(adbPath, "devices");
+        // Parse: skip first line ("List of devices attached"), look for a line with "device"
+        bool found = false;
+        auto pos = devices.find('\n');
+        if (pos != std::string::npos)
+        {
+            auto rest = devices.substr(pos + 1);
+            if (rest.find("device") != std::string::npos)
+                found = true;
+        }
+        if (!found)
+        {
+            std::fprintf(stderr, "[server] No tablet detected. Check USB cable and USB Debugging.\n");
+            return false;
+        }
+        std::fprintf(stderr, "[server] Tablet found! Setting up tunnels...\n");
+        if (!RunAdb(adbPath, "reverse tcp:27183 tcp:27183")) return false;
+        if (!RunAdb(adbPath, "reverse tcp:27184 tcp:27184")) return false;
+        return true;
+    }
+
+    void LaunchTabletApp(const std::string& adbPath)
+    {
+        RunAdb(adbPath, "shell am force-stop com.legion.tablink");
+        ::Sleep(500);
+        RunAdb(adbPath, "shell am start -n com.legion.tablink/.MainActivity");
+    }
+
+    // ── CLI ──────────────────────────────────────────────────────────
+
     void ShowUsage()
     {
         std::fputs(
-            "LegionTabLink host-streamer\n"
+            "GL ExtraScreen Server v1.0\n"
             "  --width N      virtual display width  (default 2000)\n"
             "  --height N     virtual display height (default 1200)\n"
-            "  --fps N        encoder frame rate     (default 60)\n"
-            "  --bitrate N    target bitrate in Mbps (default 25)\n",
+            "  --fps N        encoder frame rate     (default 30)\n"
+            "  --bitrate N    target bitrate in Mbps (default 20)\n",
             stderr);
     }
 
@@ -75,6 +191,11 @@ int main(int argc, char** argv)
 {
     // Make DXGI report physical pixels, not DPI-scaled coordinates
     ::SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+
+    std::fprintf(stderr, "============================================\n");
+    std::fprintf(stderr, "  GL ExtraScreen Server v1.0\n");
+    std::fprintf(stderr, "============================================\n\n");
+
     DWORD width = DefaultWidth;
     DWORD height = DefaultHeight;
     DWORD fps = DefaultFps;
@@ -84,6 +205,64 @@ int main(int argc, char** argv)
         return 1;
     }
 
+    // ── ADB setup (find adb, connect tablet, set tunnels) ──
+    auto adbPath = FindAdbPath();
+    if (adbPath.empty())
+    {
+        std::fprintf(stderr, "[server] ERROR: adb.exe not found!\n");
+        std::fprintf(stderr, "[server] Download Android Platform Tools from:\n");
+        std::fprintf(stderr, "[server]   https://developer.android.com/tools/releases/platform-tools\n");
+        std::fprintf(stderr, "[server] Place adb.exe next to this .exe or add it to PATH.\n");
+        std::fprintf(stderr, "\nPress any key to exit...\n");
+        ::system("pause >nul");
+        return 1;
+    }
+    std::fprintf(stderr, "[server] Found adb: %s\n", adbPath.c_str());
+
+    if (!SetupAdbTunnels(adbPath))
+    {
+        std::fprintf(stderr, "[server] ERROR: Could not connect to tablet.\n");
+        std::fprintf(stderr, "[server] Make sure:\n");
+        std::fprintf(stderr, "[server]   1. Tablet is connected via USB\n");
+        std::fprintf(stderr, "[server]   2. USB Debugging is enabled (Developer Options)\n");
+        std::fprintf(stderr, "[server]   3. You accepted the 'Allow USB debugging' popup\n");
+        std::fprintf(stderr, "\nPress any key to exit...\n");
+        ::system("pause >nul");
+        return 1;
+    }
+    std::fprintf(stderr, "[server] ADB tunnels ready\n");
+
+    LaunchTabletApp(adbPath);
+    std::fprintf(stderr, "[server] Tablet app launched\n\n");
+
+    // ── Ensure virtual display is available ──
+    {
+        auto ensureVDD = []() {
+            const char* vddPaths[] = {
+                "C:\\Program Files\\ParsecVDisplay\\ParsecVDisplay.exe",
+                "C:\\Program Files (x86)\\ParsecVDisplay\\ParsecVDisplay.exe",
+                nullptr
+            };
+            for (auto p = vddPaths; *p; ++p)
+            {
+                if (FileExists(*p))
+                {
+                    auto running = RunCommand("tasklist /FI \"IMAGENAME eq ParsecVDisplay.exe\" /NH 2>nul");
+                    if (running.find("ParsecVDisplay") == std::string::npos)
+                    {
+                        std::fprintf(stderr, "[server] Launching ParsecVDisplay...\n");
+                        ::ShellExecuteA(nullptr, "open", *p, nullptr, nullptr, SW_SHOWMINNOACTIVE);
+                        ::Sleep(2000);
+                    }
+                    return true;
+                }
+            }
+            return false;
+        };
+        ensureVDD();
+    }
+
+    // ── Video pipeline ──
     WSADATA wsaData{};
     if (::WSAStartup(MAKEWORD(2, 2), &wsaData) != 0)
     {
@@ -95,10 +274,24 @@ int main(int argc, char** argv)
     DxgiCapture capture;
     if (!capture.Start(width, height))
     {
-        std::fprintf(stderr, "[main] virtual display %ux%u not found\n", static_cast<unsigned>(width), static_cast<unsigned>(height));
+        std::fprintf(stderr, "\n[server] No virtual display found!\n");
+        std::fprintf(stderr, "[server] Open ParsecVDisplay from the system tray and add a display.\n");
+        std::fprintf(stderr, "[server] Recommended: 1920x1080 @ 60Hz\n");
+        std::fprintf(stderr, "\nWaiting for virtual display... (press Ctrl+C to cancel)\n");
+        for (int attempt = 0; attempt < 120; ++attempt)
+        {
+            ::Sleep(2000);
+            if (capture.Start(width, height))
+            {
+                std::fprintf(stderr, "[server] Virtual display detected!\n\n");
+                goto pipelineReady;
+            }
+        }
+        std::fprintf(stderr, "[server] Timed out waiting for virtual display.\n");
         ::WSACleanup();
         return 1;
     }
+    pipelineReady:
 
     auto encoder = CreateEncoderForAdapterVendor(capture.VendorId(), capture.Device(), capture.Width(), capture.Height(), fps, bitrateMbps * 1000u * 1000u);
     if (encoder == nullptr)

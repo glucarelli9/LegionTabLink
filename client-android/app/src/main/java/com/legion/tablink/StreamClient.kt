@@ -56,6 +56,13 @@ object WireProtocol
     const val ToolMouse = 0x04
 }
 
+interface ConnectionListener
+{
+    fun onConnecting()
+    fun onConnected(width: Int, height: Int, fps: Int)
+    fun onDisconnected()
+}
+
 class StreamClient(
     private val decoder: LowLatencyDecoder,
     private val tabletMaxWidth: Int,
@@ -70,6 +77,7 @@ class StreamClient(
         const val READ_BUFFER_SIZE = 128 * 1024
     }
 
+    var connectionListener: ConnectionListener? = null
     private val running = AtomicBoolean(false)
     private var reader: Thread? = null
 
@@ -112,6 +120,7 @@ class StreamClient(
     {
         while (running.get())
         {
+            connectionListener?.onConnecting()
             val socket = Socket()
             try
             {
@@ -130,6 +139,7 @@ class StreamClient(
             }
             finally
             {
+                connectionListener?.onDisconnected()
                 try
                 {
                     socket.close()
@@ -215,6 +225,7 @@ class StreamClient(
                     val codec = parameters.get().toInt() and 0xFF
                     Log.d("LTL", "Config: ${width}x${height} @ $fps fps, codec=$codec")
                     decoder.onStreamConfigured(width, height, codec)
+                    connectionListener?.onConnected(width, height, fps)
                 }
 
                 WireProtocol.PacketVideo ->

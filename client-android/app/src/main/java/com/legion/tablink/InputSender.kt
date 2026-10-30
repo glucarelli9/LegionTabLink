@@ -29,21 +29,28 @@ data class LtlPointerSample(
 }
 
 @SuppressLint("ClickableViewAccessibility")
-class LtlCaptureView(context: android.content.Context, private val inputSender: InputSender) : SurfaceView(context)
+class LtlCaptureView @JvmOverloads constructor(
+    context: android.content.Context,
+    attrs: android.util.AttributeSet? = null
+) : SurfaceView(context, attrs)
 {
+    var inputSender: InputSender? = null
+
     override fun onTouchEvent(event: MotionEvent): Boolean
     {
+        val sender = inputSender ?: return super.onTouchEvent(event)
         requestUnbufferedDispatch(event)
-        inputSender.publishTouchEvent(this, event)
+        sender.publishTouchEvent(this, event)
         return true
     }
 
     override fun onGenericMotionEvent(event: MotionEvent): Boolean
     {
+        val sender = inputSender ?: return super.onGenericMotionEvent(event)
         if (event.isFromSource(android.view.InputDevice.SOURCE_CLASS_POINTER))
         {
             requestUnbufferedDispatch(event)
-            inputSender.publishHoverEvent(this, event)
+            sender.publishHoverEvent(this, event)
             return true
         }
         return super.onGenericMotionEvent(event)
