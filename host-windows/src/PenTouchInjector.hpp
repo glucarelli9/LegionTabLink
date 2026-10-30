@@ -21,6 +21,7 @@ public:
     bool Start(const RECT& monitorRect);
     void Stop();
     void Inject(const LtlInputEventPayload& event);
+    void UpdateBounds(const RECT& newBounds) { m_bounds = newBounds; }
 
 private:
     struct Entry

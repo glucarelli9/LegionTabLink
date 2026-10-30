@@ -24,3 +24,9 @@ captures/
 # OS
 Thumbs.db
 Desktop.ini
+
+# Local exe backups
+host-windows/backups/
+
+# Vendored WebView2 static loader (needed to build)
+!host-windows/third_party/webview2/x64/WebView2LoaderStatic.lib

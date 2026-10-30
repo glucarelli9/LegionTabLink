@@ -4,7 +4,7 @@ project(GLExtraScreenHost LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-add_executable(GLExtraScreen-Server
+add_executable(GLExtraScreen-Server WIN32
     src/main.cpp
     src/DxgiCapture.cpp
     src/EncoderFactory.cpp
@@ -19,6 +19,7 @@ target_include_directories(GLExtraScreen-Server PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/../protocol
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/webview2/include
 )
 
 target_compile_definitions(GLExtraScreen-Server PRIVATE
@@ -40,8 +41,15 @@ target_link_libraries(GLExtraScreen-Server PRIVATE
     ole32
     user32
     gdi32
+    gdiplus
     shell32
+    setupapi
+    dwmapi
+    version
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/webview2/x64/WebView2LoaderStatic.lib
 )
+
+set_property(SOURCE src/app.rc APPEND PROPERTY OBJECT_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/index.html)
 
 set_property(TARGET GLExtraScreen-Server PROPERTY
     MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"

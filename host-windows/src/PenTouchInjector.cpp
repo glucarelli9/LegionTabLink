@@ -42,8 +42,8 @@ bool PenTouchInjector::Start(const RECT& monitorRect)
 {
     m_bounds = monitorRect;
 
-    m_penDevice = ::CreateSyntheticPointerDevice(PT_PEN, 1, POINTER_FEEDBACK_DEFAULT);
-    m_touchDevice = ::CreateSyntheticPointerDevice(PT_TOUCH, LTL_MAX_INPUT_POINTERS, POINTER_FEEDBACK_DEFAULT);
+    m_penDevice = ::CreateSyntheticPointerDevice(PT_PEN, 1, POINTER_FEEDBACK_NONE);
+    m_touchDevice = ::CreateSyntheticPointerDevice(PT_TOUCH, LTL_MAX_INPUT_POINTERS, POINTER_FEEDBACK_NONE);
     if (m_penDevice == nullptr || m_touchDevice == nullptr)
     {
         std::fprintf(stderr, "[inject] CreateSyntheticPointerDevice failed err=%lu\n", ::GetLastError());
@@ -82,14 +82,21 @@ void PenTouchInjector::BuildPointerEntry(bool pen, bool first, const Entry& entr
     const LONG pixelX = ClampToRange(m_bounds.left + static_cast<LONG>(payload.x * static_cast<float>(spanX)), m_bounds.left, m_bounds.right - 1);
     const LONG pixelY = ClampToRange(m_bounds.top + static_cast<LONG>(payload.y * static_cast<float>(spanY)), m_bounds.top, m_bounds.bottom - 1);
 
+    // InjectSyntheticPointerInput interprets coordinates relative to the
+    // virtual-desktop origin, which is negative when a monitor sits above/left of the primary.
+    const LONG originX = ::GetSystemMetrics(SM_XVIRTUALSCREEN);
+    const LONG originY = ::GetSystemMetrics(SM_YVIRTUALSCREEN);
+    const LONG injX = pixelX - originX;
+    const LONG injY = pixelY - originY;
+
     UINT32 deviceState = 0;
     switch (payload.pointerState)
     {
     case LtlPointerHovering:
-        deviceState = POINTER_FLAG_INRANGE;
+        deviceState = POINTER_FLAG_INRANGE | POINTER_FLAG_UPDATE;
         break;
     case LtlPointerContact:
-        deviceState = POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT;
+        deviceState = POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT | POINTER_FLAG_UPDATE;
         break;
     default:
         deviceState = 0;
@@ -101,7 +108,7 @@ void PenTouchInjector::BuildPointerEntry(bool pen, bool first, const Entry& entr
     }
     if (entry.fresh)
     {
-        deviceState |= POINTER_FLAG_NEW;
+        deviceState = (deviceState & ~POINTER_FLAG_UPDATE) | POINTER_FLAG_DOWN | POINTER_FLAG_NEW;
     }
     if (first)
     {
@@ -126,8 +133,8 @@ void PenTouchInjector::BuildPointerEntry(bool pen, bool first, const Entry& entr
     info.penInfo.pointerInfo.pointerType = static_cast<POINTER_INPUT_TYPE>(pen ? PT_PEN : PT_TOUCH);
     info.penInfo.pointerInfo.pointerId = payload.pointerId;
     info.penInfo.pointerInfo.pointerFlags = deviceState | buttonFlags;
-    info.penInfo.pointerInfo.ptPixelLocation.x = pixelX;
-    info.penInfo.pointerInfo.ptPixelLocation.y = pixelY;
+    info.penInfo.pointerInfo.ptPixelLocation.x = injX;
+    info.penInfo.pointerInfo.ptPixelLocation.y = injY;
 
     if (pen)
     {
@@ -152,10 +159,10 @@ void PenTouchInjector::BuildPointerEntry(bool pen, bool first, const Entry& entr
     {
         info.touchInfo.touchFlags = TOUCH_FLAG_NONE;
         info.touchInfo.touchMask = TOUCH_MASK_CONTACTAREA | TOUCH_MASK_PRESSURE;
-        info.touchInfo.rcContact.left = ClampToRange(pixelX - 2, m_bounds.left, m_bounds.right);
-        info.touchInfo.rcContact.top = ClampToRange(pixelY - 2, m_bounds.top, m_bounds.bottom);
-        info.touchInfo.rcContact.right = ClampToRange(pixelX + 2, m_bounds.left, m_bounds.right);
-        info.touchInfo.rcContact.bottom = ClampToRange(pixelY + 2, m_bounds.top, m_bounds.bottom);
+        info.touchInfo.rcContact.left = injX - 2;
+        info.touchInfo.rcContact.top = injY - 2;
+        info.touchInfo.rcContact.right = injX + 2;
+        info.touchInfo.rcContact.bottom = injY + 2;
         info.touchInfo.pressure = payload.pointerState == LtlPointerContact ? pressure : 0;
         info.touchInfo.orientation = 0;
     }
@@ -163,6 +170,8 @@ void PenTouchInjector::BuildPointerEntry(bool pen, bool first, const Entry& entr
 
 void PenTouchInjector::FlushFrame(bool pen, const Entry* entries, uint32_t count)
 {
+    if (count == 0) return;
+
     const HSYNTHETICPOINTERDEVICE device = pen
         ? static_cast<HSYNTHETICPOINTERDEVICE>(m_penDevice)
         : static_cast<HSYNTHETICPOINTERDEVICE>(m_touchDevice);
@@ -181,6 +190,7 @@ void PenTouchInjector::FlushFrame(bool pen, const Entry* entries, uint32_t count
     {
         BuildPointerEntry(pen, i == 0, entries[i], m_frame[i]);
     }
+
     if (!::InjectSyntheticPointerInput(device, m_frame.data(), effective))
     {
         std::fprintf(stderr, "[inject] InjectSyntheticPointerInput failed err=%lu\n", ::GetLastError());

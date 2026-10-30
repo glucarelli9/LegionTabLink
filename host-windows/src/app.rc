@@ -1,1 +1,2 @@
-IDI_ICON1 ICON "LegionTabLink.ico"
+101 ICON "GLExtraScreen.ico"
+201 RCDATA "ui/index.html"

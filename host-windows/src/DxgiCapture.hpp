@@ -17,7 +17,8 @@ public:
     DxgiCapture(const DxgiCapture&) = delete;
     DxgiCapture& operator=(const DxgiCapture&) = delete;
 
-    bool Start(uint32_t expectedWidth, uint32_t expectedHeight);
+    bool Start(uint32_t expectedWidth, uint32_t expectedHeight,
+               const wchar_t* preferredDevice = nullptr);
     void Stop();
 
     ID3D11Device* Device() const;
@@ -25,6 +26,7 @@ public:
     uint32_t Width() const;
     uint32_t Height() const;
     void GetMonitorRect(RECT& outRect) const;
+    bool RefreshMonitorRect();
     const wchar_t* AdapterName() const;
 
     bool AcquireFrame(ID3D11Texture2D** frame, uint32_t timeoutMs);

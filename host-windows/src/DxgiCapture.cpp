@@ -89,7 +89,8 @@ DxgiCapture::~DxgiCapture()
     Stop();
 }
 
-bool DxgiCapture::Start(uint32_t expectedWidth, uint32_t expectedHeight)
+bool DxgiCapture::Start(uint32_t expectedWidth, uint32_t expectedHeight,
+                        const wchar_t* preferredDevice)
 {
     HRESULT hr = ::CreateDXGIFactory1(__uuidof(IDXGIFactory6), reinterpret_cast<void**>(m_factory.GetAddressOf()));
     if (FAILED(hr))
@@ -151,20 +152,37 @@ bool DxgiCapture::Start(uint32_t expectedWidth, uint32_t expectedHeight)
         return false;
     }
 
+    // Log all candidates for debugging
+    for (const auto& c : candidates)
+    {
+        std::fprintf(stderr, "[dxgi] candidate: %s adapter=%s res=%ux%u primary=%d vdd=%d\n",
+            ToAscii(c.desc.DeviceName).c_str(),
+            ToAscii(c.adapterDesc.Description).c_str(),
+            static_cast<unsigned>(c.desc.DesktopCoordinates.right - c.desc.DesktopCoordinates.left),
+            static_cast<unsigned>(c.desc.DesktopCoordinates.bottom - c.desc.DesktopCoordinates.top),
+            c.isPrimary ? 1 : 0, c.nameMatches ? 1 : 0);
+    }
+
     OutputCandidate* best = &candidates.front();
     for (OutputCandidate& candidate : candidates)
     {
-        // Prefer: resolution match (4) > name hint (2) > non-primary (1)
-        auto score = [](const OutputCandidate& c) {
-            return static_cast<int>(c.resolutionMatches) * 4
-                 + static_cast<int>(c.nameMatches) * 2
-                 + (c.isPrimary ? 0 : 1);
+        // Prefer: explicit device name (100) > resolution (4) > name hint (2) > non-primary (1)
+        auto score = [preferredDevice](const OutputCandidate& c) {
+            int s = static_cast<int>(c.resolutionMatches) * 4
+                  + static_cast<int>(c.nameMatches) * 2
+                  + (c.isPrimary ? 0 : 1);
+            if (preferredDevice && ::wcscmp(c.desc.DeviceName, preferredDevice) == 0)
+                s += 100;
+            return s;
         };
         if (score(candidate) > score(*best))
         {
             best = &candidate;
         }
     }
+    std::fprintf(stderr, "[dxgi] selected: %s (score includes preferred=%s)\n",
+        ToAscii(best->desc.DeviceName).c_str(),
+        preferredDevice ? ToAscii(preferredDevice).c_str() : "none");
 
     m_adapter = best->adapter;
     m_output = best->output;
@@ -291,6 +309,27 @@ uint32_t DxgiCapture::Height() const
 void DxgiCapture::GetMonitorRect(RECT& outRect) const
 {
     outRect = m_monitorRect;
+}
+
+bool DxgiCapture::RefreshMonitorRect()
+{
+    if (!m_output) return false;
+    DXGI_OUTPUT_DESC desc{};
+    if (SUCCEEDED(m_output->GetDesc(&desc)))
+    {
+        if (desc.DesktopCoordinates.left   != m_monitorRect.left  ||
+            desc.DesktopCoordinates.top    != m_monitorRect.top   ||
+            desc.DesktopCoordinates.right  != m_monitorRect.right ||
+            desc.DesktopCoordinates.bottom != m_monitorRect.bottom)
+        {
+            m_monitorRect = desc.DesktopCoordinates;
+            std::fprintf(stderr, "[dxgi] Monitor rect updated: {%ld,%ld,%ld,%ld}\n",
+                m_monitorRect.left, m_monitorRect.top,
+                m_monitorRect.right, m_monitorRect.bottom);
+            return true;
+        }
+    }
+    return false;
 }
 
 const wchar_t* DxgiCapture::AdapterName() const
