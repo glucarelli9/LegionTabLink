@@ -199,6 +199,7 @@ class MainActivity : Activity()
 
     private fun startPulse()
     {
+        if (pulseAnimator?.isRunning == true) return
         pulseAnimator?.cancel()
         val anim = ObjectAnimator.ofFloat(statusDot, "alpha", 1f, 0.3f)
         anim.duration = 800
