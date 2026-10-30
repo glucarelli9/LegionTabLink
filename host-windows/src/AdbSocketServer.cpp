@@ -1,6 +1,8 @@
 #include "AdbSocketServer.hpp"
 
+#include <algorithm>
 #include <cstdio>
+#include <cstring>
 #include <cwchar>
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -274,11 +276,12 @@ void AdbSocketServer::UpdateStreamConfig(const StreamConfig& config)
     m_resizePending.store(false);
 }
 
-bool AdbSocketServer::ConsumeResizeRequest(uint32_t& width, uint32_t& height)
+bool AdbSocketServer::ConsumeResizeRequest(uint32_t& width, uint32_t& height, uint8_t& codecMask)
 {
     if (!m_resizePending.load()) return false;
     width = m_requestedWidth.load();
     height = m_requestedHeight.load();
+    codecMask = m_requestedCodecMask.load();
     return true;
 }
 
@@ -314,13 +317,24 @@ void AdbSocketServer::HandleVideoClient(SOCKET client)
         LtlHelloPayload hello{};
         std::memcpy(&hello, helloPayload, sizeof(hello));
         const StreamConfig current = GetConfig();
+        // reserved0 = max refresh rate, reserved1 = decodable codecs (bit0 HEVC, bit1 AVC); 0 from pre-1.3 clients
+        const uint8_t codecMask = hello.reserved1 ? hello.reserved1 : 0x01;
+        const uint8_t currentBit = current.codec == LtlVideoCodecAvc ? 0x02 : 0x01;
         const bool wantPortrait = hello.maxHeight > hello.maxWidth;
         const bool havePortrait = current.height > current.width;
-        if (hello.maxWidth > 0 && hello.maxHeight > 0 && wantPortrait != havePortrait)
+        const bool rotate = hello.maxWidth > 0 && hello.maxHeight > 0 && wantPortrait != havePortrait;
+        const bool recodec = (codecMask & currentBit) == 0;
+        std::fprintf(stderr, "[tcp] tablet hello: %ux%u, %u Hz, codecs 0x%02X\n",
+            static_cast<unsigned>(hello.maxWidth), static_cast<unsigned>(hello.maxHeight),
+            static_cast<unsigned>(hello.reserved0), static_cast<unsigned>(codecMask));
+        if (rotate || recodec)
         {
-            std::fprintf(stderr, "[tcp] tablet rotated -> %s, rebuilding stream\n", wantPortrait ? "portrait" : "landscape");
-            m_requestedWidth.store(hello.maxWidth);
-            m_requestedHeight.store(hello.maxHeight);
+            std::fprintf(stderr, "[tcp] rebuilding stream (%s%s)\n", rotate ? (wantPortrait ? "portrait" : "landscape") : "",
+                recodec ? " codec" : "");
+            const bool portrait = rotate ? wantPortrait : havePortrait;
+            m_requestedWidth.store(portrait ? (std::min)(current.width, current.height) : (std::max)(current.width, current.height));
+            m_requestedHeight.store(portrait ? (std::max)(current.width, current.height) : (std::min)(current.width, current.height));
+            m_requestedCodecMask.store(codecMask);
             m_resizePending.store(true);
             for (int waited = 0; m_resizePending.load() && m_running.load() && waited < 15000; waited += 20)
             {

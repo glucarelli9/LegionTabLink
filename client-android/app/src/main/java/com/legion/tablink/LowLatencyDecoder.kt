@@ -31,6 +31,8 @@ class LowLatencyDecoder(private val keyframeRequester: KeyframeRequester)
         const val HEVC_NAL_TYPE_VPS = 32
         const val HEVC_NAL_TYPE_SPS = 33
         const val HEVC_NAL_TYPE_PPS = 34
+        const val AVC_NAL_TYPE_SPS = 7
+        const val AVC_NAL_TYPE_PPS = 8
         const val VENDOR_QTI_DEC_LOW_LATENCY = "vendor.qti-ext-dec-low-latency.enable"
         const val CSD_BUFFER_KEY = "csd-0"
         val CSD_START_CODE_4 = byteArrayOf(0, 0, 0, 1)
@@ -169,7 +171,8 @@ class LowLatencyDecoder(private val keyframeRequester: KeyframeRequester)
         while (running.get())
         {
             val attachedSurface = surface
-            if (attachedSurface == null || !attachedSurface.isValid || streamCodec != WireProtocol.CodecHevc)
+            if (attachedSurface == null || !attachedSurface.isValid ||
+                (streamCodec != WireProtocol.CodecHevc && streamCodec != WireProtocol.CodecAvc))
             {
                 loopLogCount++
                 if (loopLogCount <= 3 || loopLogCount % 500 == 0)
@@ -222,7 +225,7 @@ class LowLatencyDecoder(private val keyframeRequester: KeyframeRequester)
                 Log.e("LTL-DEC", "pumpQueue: extractParameterSets returned null! payload first16=${frame.payload.take(16).joinToString(" ") { String.format("%02X", it) }}")
                 return
             }
-            Log.d("LTL-DEC", "pumpQueue: got CSD ${parameterSets.size}b, creating codec for ${streamWidth}x${streamHeight}")
+            Log.d("LTL-DEC", "pumpQueue: got ${parameterSets.size} parameter sets, creating codec for ${streamWidth}x${streamHeight}")
             ensureCodec(attachedSurface, parameterSets)
             if (codec == null)
             {
@@ -258,23 +261,35 @@ class LowLatencyDecoder(private val keyframeRequester: KeyframeRequester)
         return null
     }
 
-    private fun ensureCodec(attachedSurface: Surface, parameterSets: ByteArray)
+    private fun ensureCodec(attachedSurface: Surface, parameterSets: Map<Int, ByteArray>)
     {
-        Log.d("LTL-DEC", "ensureCodec: creating HEVC decoder ${streamWidth}x${streamHeight} surface.valid=${attachedSurface.isValid}")
+        val avc = streamCodec == WireProtocol.CodecAvc
+        val mime = if (avc) MediaFormat.MIMETYPE_VIDEO_AVC else MediaFormat.MIMETYPE_VIDEO_HEVC
+        Log.d("LTL-DEC", "ensureCodec: creating $mime decoder ${streamWidth}x${streamHeight} surface.valid=${attachedSurface.isValid}")
         try
         {
-            val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_HEVC, streamWidth, streamHeight)
+            val format = MediaFormat.createVideoFormat(mime, streamWidth, streamHeight)
             format.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, MAX_INPUT_SIZE)
             format.setInteger(MediaFormat.KEY_PRIORITY, 0)
             format.setInteger(MediaFormat.KEY_OPERATING_RATE, Short.MAX_VALUE.toInt())
-            format.setByteBuffer(CSD_BUFFER_KEY, ByteBuffer.wrap(parameterSets))
+            if (avc)
+            {
+                format.setByteBuffer("csd-0", ByteBuffer.wrap(parameterSets.getValue(AVC_NAL_TYPE_SPS)))
+                format.setByteBuffer("csd-1", ByteBuffer.wrap(parameterSets.getValue(AVC_NAL_TYPE_PPS)))
+            }
+            else
+            {
+                val all = ByteArrayOutputStream()
+                parameterSets.values.forEach { all.write(it) }
+                format.setByteBuffer(CSD_BUFFER_KEY, ByteBuffer.wrap(all.toByteArray()))
+            }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
             {
                 format.setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
             }
             try { format.setInteger(VENDOR_QTI_DEC_LOW_LATENCY, 1) } catch (e: Exception) { Log.w("LTL-DEC", "QTI low-latency key not supported: ${e.message}") }
 
-            val decoder = MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_HEVC)
+            val decoder = MediaCodec.createDecoderByType(mime)
             Log.d("LTL-DEC", "ensureCodec: decoder created, configuring...")
             decoder.configure(format, attachedSurface, null, 0)
             Log.d("LTL-DEC", "ensureCodec: configured, starting...")
@@ -335,7 +350,8 @@ class LowLatencyDecoder(private val keyframeRequester: KeyframeRequester)
         }
     }
 
-    private fun extractParameterSets(payload: ByteArray): ByteArray?
+    /** Parameter-set NALs (VPS/SPS/PPS for HEVC, SPS/PPS for AVC) keyed by NAL type, each with a 4-byte start code. */
+    private fun extractParameterSets(payload: ByteArray): Map<Int, ByteArray>?
     {
         val nalStarts = collectNalStarts(payload)
         if (nalStarts.isEmpty())
@@ -343,8 +359,8 @@ class LowLatencyDecoder(private val keyframeRequester: KeyframeRequester)
             return null
         }
 
-        val parameterSets = ByteArrayOutputStream()
-        var found = 0
+        val avc = streamCodec == WireProtocol.CodecAvc
+        val sets = LinkedHashMap<Int, ByteArray>()
         for (position in nalStarts.indices)
         {
             val start = nalStarts[position]
@@ -355,20 +371,20 @@ class LowLatencyDecoder(private val keyframeRequester: KeyframeRequester)
                 continue
             }
             val firstByte = payload[headerOffset].toInt() and 0xFF
-            val nalType = (firstByte shr 1) and 0x3F
-            if (nalType != HEVC_NAL_TYPE_VPS && nalType != HEVC_NAL_TYPE_SPS && nalType != HEVC_NAL_TYPE_PPS)
+            val nalType = if (avc) firstByte and 0x1F else (firstByte shr 1) and 0x3F
+            val wanted = if (avc) nalType == AVC_NAL_TYPE_SPS || nalType == AVC_NAL_TYPE_PPS
+                         else nalType == HEVC_NAL_TYPE_VPS || nalType == HEVC_NAL_TYPE_SPS || nalType == HEVC_NAL_TYPE_PPS
+            if (!wanted || sets.containsKey(nalType))
             {
                 continue
             }
-            parameterSets.write(CSD_START_CODE_4, 0, CSD_START_CODE_4.size)
-            parameterSets.write(payload, headerOffset, end - headerOffset)
-            found += 1
+            val nal = ByteArrayOutputStream()
+            nal.write(CSD_START_CODE_4, 0, CSD_START_CODE_4.size)
+            nal.write(payload, headerOffset, end - headerOffset)
+            sets[nalType] = nal.toByteArray()
         }
-        if (found == 0)
-        {
-            return null
-        }
-        return parameterSets.toByteArray()
+        if (avc && (!sets.containsKey(AVC_NAL_TYPE_SPS) || !sets.containsKey(AVC_NAL_TYPE_PPS))) return null
+        return sets.ifEmpty { null }
     }
 
     private fun collectNalStarts(payload: ByteArray): List<Int>

@@ -1,6 +1,6 @@
 [Setup]
 AppName=GL ExtraScreen
-AppVersion=1.2
+AppVersion=1.3
 AppPublisher=Gianfranco Lucarelli
 AppPublisherURL=https://github.com/glucarelli9/LegionTabLink
 AppSupportURL=https://github.com/glucarelli9/LegionTabLink/issues

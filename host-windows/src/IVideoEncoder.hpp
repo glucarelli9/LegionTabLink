@@ -22,4 +22,5 @@ public:
         return EncodeFrame(frame, keyframe, outNal, ignored);
     }
     virtual void Shutdown() = 0;
+    virtual const char* Name() const { return "encoder"; }
 };

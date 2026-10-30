@@ -102,6 +102,9 @@ class MainActivity : Activity()
         inputSender = InputSender()
         streamClient = StreamClient(decoder, tabletWidth, tabletHeight)
         streamClient.connectionListener = connectionCallback
+        streamClient.maxRefreshHz = display?.supportedModes?.maxOfOrNull { it.refreshRate }?.let { Math.round(it) } ?: 60
+        streamClient.codecMask = detectCodecMask()
+        Log.d("LTL-MAIN", "capabilities: ${streamClient.maxRefreshHz} Hz, codecMask=${streamClient.codecMask}")
 
         captureView.inputSender = inputSender
         captureView.holder.addCallback(surfaceLifecycle)
@@ -139,6 +142,17 @@ class MainActivity : Activity()
     private var lastPortrait = false
     private var rotating = false
     private val rotationTimeout = Runnable { if (rotating) { rotating = false; showConnecting() } }
+
+    private fun detectCodecMask(): Int
+    {
+        val decoders = android.media.MediaCodecList(android.media.MediaCodecList.REGULAR_CODECS).codecInfos
+            .filter { !it.isEncoder && it.isHardwareAccelerated }
+        fun has(mime: String) = decoders.any { info -> info.supportedTypes.any { it.equals(mime, ignoreCase = true) } }
+        var mask = 0
+        if (has(android.media.MediaFormat.MIMETYPE_VIDEO_HEVC)) mask = mask or StreamClient.CodecMaskHevc
+        if (has(android.media.MediaFormat.MIMETYPE_VIDEO_AVC)) mask = mask or StreamClient.CodecMaskAvc
+        return if (mask == 0) StreamClient.CodecMaskAvc else mask
+    }
 
     private fun screenSize(): Pair<Int, Int>
     {

@@ -74,10 +74,15 @@ class StreamClient(
     companion object
     {
         const val RECONNECT_BACKOFF_MS = 1000
+        const val CodecMaskHevc = 0x01
+        const val CodecMaskAvc = 0x02
         const val READ_BUFFER_SIZE = 128 * 1024
     }
 
     var connectionListener: ConnectionListener? = null
+    /** Advertised in Hello so the server can match refresh rate and codec to this device. */
+    var maxRefreshHz = 0
+    var codecMask = CodecMaskHevc
     private val running = AtomicBoolean(false)
     private var reader: Thread? = null
     @Volatile private var activeSocket: Socket? = null
@@ -182,9 +187,10 @@ class StreamClient(
         buffer.order(java.nio.ByteOrder.LITTLE_ENDIAN)
         buffer.putShort(tabletMaxWidth.coerceAtMost(Short.MAX_VALUE.toInt()).toShort())
         buffer.putShort(tabletMaxHeight.coerceAtMost(Short.MAX_VALUE.toInt()).toShort())
-        buffer.put(WireProtocol.CodecHevc.toByte())
-        buffer.put(0)
-        buffer.put(0)
+        val preferred = if (codecMask and CodecMaskHevc != 0) WireProtocol.CodecHevc else WireProtocol.CodecAvc
+        buffer.put(preferred.toByte())
+        buffer.put(maxRefreshHz.coerceIn(0, 255).toByte())
+        buffer.put(codecMask.toByte())
         buffer.put(0)
         writePacket(socket, WireProtocol.PacketHello, payload)
     }

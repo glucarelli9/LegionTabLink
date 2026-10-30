@@ -20,6 +20,7 @@ public:
     bool Initialize(ID3D11Device* device, uint32_t width, uint32_t height, uint32_t bitrate) override;
     bool EncodeFrame(ID3D11Texture2D* frame, bool keyframe, std::vector<uint8_t>& outNal, bool& outIsIdr) override;
     void Shutdown() override;
+    const char* Name() const override { return "NVENC HEVC"; }
 
 private:
     uint32_t m_fps = 0;

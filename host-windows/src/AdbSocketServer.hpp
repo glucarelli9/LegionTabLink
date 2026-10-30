@@ -41,7 +41,7 @@ public:
 
     // A client whose Hello asks for the other orientation is held until the
     // pipeline is rebuilt and UpdateStreamConfig() publishes the new size.
-    bool ConsumeResizeRequest(uint32_t& width, uint32_t& height);
+    bool ConsumeResizeRequest(uint32_t& width, uint32_t& height, uint8_t& codecMask);
     void UpdateStreamConfig(const StreamConfig& config);
 
 private:
@@ -67,6 +67,7 @@ private:
     std::atomic<bool> m_resizePending{ false };
     std::atomic<uint32_t> m_requestedWidth{ 0 };
     std::atomic<uint32_t> m_requestedHeight{ 0 };
+    std::atomic<uint8_t> m_requestedCodecMask{ 0x01 };
     InputHandler m_onInput;
     std::thread m_videoThread;
     std::thread m_inputThread;

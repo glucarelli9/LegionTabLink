@@ -10,6 +10,7 @@ add_executable(GLExtraScreen-Server WIN32
     src/EncoderFactory.cpp
     src/AmfEncoder.cpp
     src/NvencEncoder.cpp
+    src/MfEncoder.cpp
     src/AdbSocketServer.cpp
     src/PenTouchInjector.cpp
     src/app.rc

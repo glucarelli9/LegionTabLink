@@ -14,5 +14,5 @@
     <string name="step1">Connect this tablet to the PC with a USB cable</string>
     <string name="step2">Open GL ExtraScreen on the PC</string>
     <string name="step3">Press Start server — the screen shows up here</string>
-    <string name="footer" translatable="false">v1.2 · Gianfranco Lucarelli</string>
+    <string name="footer" translatable="false">v1.3 · Gianfranco Lucarelli</string>
 </resources>

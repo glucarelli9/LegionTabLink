@@ -404,6 +404,31 @@ namespace
         return true;
     }
 
+    // Highest refresh rate the tablet panel supports (e.g. "supportedRefreshRates [60.0, 90.0]"), 0 if unknown
+    DWORD QueryTabletRefresh(const std::string& adbPath)
+    {
+        const std::string raw = RunAdbOutput(adbPath, "shell dumpsys display");
+        const char* keys[] = {"supportedRefreshRates [", "mSupportedRefreshRates=["};
+        double best = 0.0;
+        for (const char* key : keys)
+        {
+            size_t pos = raw.find(key);
+            if (pos == std::string::npos) continue;
+            pos += std::strlen(key);
+            const size_t end = raw.find(']', pos);
+            while (pos < end)
+            {
+                char* stop = nullptr;
+                const double value = std::strtod(raw.c_str() + pos, &stop);
+                if (stop == raw.c_str() + pos) { ++pos; continue; }
+                if (value > best && value < 500.0) best = value;
+                pos = static_cast<size_t>(stop - raw.c_str());
+            }
+            if (best > 0.0) break;
+        }
+        return static_cast<DWORD>(best + 0.5);
+    }
+
     bool TabletAttached(const std::string& adbPath)
     {
         return RunAdbOutput(adbPath, "devices").find("\tdevice") != std::string::npos;
@@ -496,6 +521,18 @@ struct QualityPreset { DWORD fps; DWORD bitrateMbps; };
 static constexpr QualityPreset kQualityPresets[] = { {90, 35}, {60, 30}, {60, 50} };
 static DWORD g_quality = 1;
 static bool  g_restartPending = false;
+static bool  g_forceMediaFoundation = false;
+static bool  g_forceAvc = false;
+static std::atomic<DWORD> g_activeFps{0};
+static std::atomic<const char*> g_encoderName{nullptr};
+
+// Called from the server thread; the UI picks it up on the next state push.
+static void SetEncoderInfo(const char* name)
+{
+    g_encoderName = name;
+    if (g_mainWnd && ::IsWindow(g_mainWnd))
+        ::PostMessageW(g_mainWnd, WM_STATUSUPDATE, 0, 0);
+}
 static constexpr const wchar_t* kSettingsKey = L"Software\\GLExtraScreen";
 
 static void ApplyQuality(DWORD q)
@@ -528,6 +565,10 @@ static void SetupStderrRedirect()
     HWND hCon = ::GetConsoleWindow();
     if (hCon) ::ShowWindow(hCon, SW_HIDE);
 
+    // A GUI-subsystem process starts with stderr unbound (_fileno == -2); give it a real fd before redirecting
+    FILE* unused = nullptr;
+    freopen_s(&unused, "NUL", "w", stderr);
+
     int fds[2];
     if (_pipe(fds, 8192, _O_BINARY) == 0)
     {
@@ -542,6 +583,12 @@ static void LogReaderLoop()
 {
     char raw[2048];
     std::string leftover;
+
+    wchar_t logPath[MAX_PATH]{};
+    ::ExpandEnvironmentStringsW(L"%LOCALAPPDATA%\\GLExtraScreen", logPath, MAX_PATH);
+    ::CreateDirectoryW(logPath, nullptr);
+    wcscat_s(logPath, L"\\server.log");
+    FILE* logFile = _wfopen(logPath, L"w");
     while (true)
     {
         int n = _read(g_pipeRd, raw, sizeof(raw) - 1);
@@ -555,6 +602,11 @@ static void LogReaderLoop()
             {
                 std::string line = leftover.substr(start, i - start);
                 if (!line.empty() && line.back() == '\r') line.pop_back();
+                if (logFile && !line.empty())
+                {
+                    std::fprintf(logFile, "%s\n", line.c_str());
+                    std::fflush(logFile);
+                }
                 if (!line.empty() && g_mainWnd && ::IsWindow(g_mainWnd))
                 {
                     char* copy = _strdup(line.c_str());
@@ -566,6 +618,7 @@ static void LogReaderLoop()
         }
         leftover = leftover.substr(start);
     }
+    if (logFile) std::fclose(logFile);
 }
 
 enum StatusKind : WPARAM { KindIdle, KindWarn, KindOk, KindLive };
@@ -635,10 +688,13 @@ static void WebPost(const std::wstring& json)
 
 static void WebSendState()
 {
-    wchar_t buf[256];
-    swprintf(buf, 256, L"{\"t\":\"state\",\"lang\":\"%s\",\"running\":%s,\"w\":%lu,\"h\":%lu,\"fps\":%lu,\"br\":%lu,\"q\":%lu}",
-        g_isSpanish ? L"es" : L"en", g_serverRunning.load() ? L"true" : L"false",
-        g_width, g_height, g_fps, g_bitrate, g_quality);
+    const bool running = g_serverRunning.load();
+    const DWORD fps = running && g_activeFps.load() ? g_activeFps.load() : g_fps;
+    const char* enc = running ? g_encoderName.load() : nullptr;
+    wchar_t buf[320];
+    swprintf(buf, 320, L"{\"t\":\"state\",\"lang\":\"%s\",\"running\":%s,\"w\":%lu,\"h\":%lu,\"fps\":%lu,\"br\":%lu,\"q\":%lu,\"enc\":\"%hs\"}",
+        g_isSpanish ? L"es" : L"en", running ? L"true" : L"false",
+        g_width, g_height, fps, g_bitrate, g_quality, enc ? enc : "");
     WebPost(buf);
 }
 
@@ -948,6 +1004,18 @@ static void ServerMain()
         {
             std::fprintf(stderr, "[server] Could not query tablet resolution, using default %lux%lu\n", w, h);
         }
+
+        const DWORD tabletHz = QueryTabletRefresh(adbPath);
+        if (tabletHz >= 30 && fps > tabletHz)
+        {
+            std::fprintf(stderr, "[server] Tablet panel is %lu Hz, capping %lu FPS to %lu\n", tabletHz, fps, tabletHz);
+            fps = tabletHz;
+        }
+        else if (tabletHz)
+        {
+            std::fprintf(stderr, "[server] Tablet panel supports %lu Hz\n", tabletHz);
+        }
+        g_activeFps = fps;
     }
 
     // ── VDD Driver ──
@@ -1095,13 +1163,16 @@ static void ServerMain()
     }
     std::fprintf(stderr, "[dxgi] Capture active %ux%u\n", capture.Width(), capture.Height());
 
-    auto encoder = CreateEncoderForAdapterVendor(
-        capture.VendorId(), capture.Device(),
-        capture.Width(), capture.Height(), fps, br * 1000u * 1000u);
+    uint8_t tabletCodecMask = g_forceAvc ? CodecMaskAvc : (CodecMaskHevc | CodecMaskAvc); // refined by the tablet's Hello
+    uint8_t codec = LtlVideoCodecHevc;
+    auto encoder = CreateVideoEncoder(capture.VendorId(), capture.Device(),
+        capture.Width(), capture.Height(), fps, br * 1000u * 1000u, tabletCodecMask, g_forceMediaFoundation, codec);
     if (!encoder)
     {
+        std::fprintf(stderr, "[server] ERROR: no video encoder works on this PC\n");
         capture.Stop(); ::WSACleanup(); finish(); return;
     }
+    SetEncoderInfo(encoder->Name());
 
     RECT monRect{};
     capture.GetMonitorRect(monRect);
@@ -1120,7 +1191,7 @@ static void ServerMain()
     cfg.height = capture.Height();
     cfg.fps = fps;
     cfg.bitrateMbps = br;
-    cfg.codec = LtlVideoCodecHevc;
+    cfg.codec = codec;
 
     if (!server.Start(LTL_VIDEO_TCP_PORT, LTL_INPUT_TCP_PORT, cfg,
             [&injector](const LtlInputEventPayload& ev) { injector.Inject(ev); }))
@@ -1165,52 +1236,60 @@ static void ServerMain()
         return true;
     };
 
-    // Switch the virtual display between landscape/portrait in place and rebuild capture + encoder.
-    auto rotateTo = [&](uint32_t reqW, uint32_t reqH) -> bool {
+    // Rebuild the pipeline for a new orientation and/or codec set requested by the tablet.
+    // Orientation changes switch the virtual display mode in place; both modes were registered up front.
+    auto rebuild = [&](uint32_t reqW, uint32_t reqH, uint8_t codecMask) -> bool {
         const DWORD longSide = w > h ? w : h, shortSide = w > h ? h : w;
         const bool portrait = reqH > reqW;
         const DWORD nw = portrait ? shortSide : longSide;
         const DWORD nh = portrait ? longSide : shortSide;
-        std::fprintf(stderr, "[rotate] Switching virtual display to %lux%lu\n", nw, nh);
+        const bool rotate = nw != capture.Width() || nh != capture.Height();
+        tabletCodecMask = g_forceAvc ? CodecMaskAvc : codecMask;
 
         encoder->Shutdown();
         encoder.reset();
-        capture.Stop();
-        ConfigureVddPosition(vddName, nw, nh, fps);
-
-        bool ok = false;
-        for (int attempt = 0; attempt < 24 && !g_stopRequested; ++attempt)
+        if (rotate)
         {
-            ::Sleep(250);
-            if (capture.Start(nw, nh, preferDev) && capture.Width() == nw && capture.Height() == nh) { ok = true; break; }
+            std::fprintf(stderr, "[rotate] Switching virtual display to %lux%lu\n", nw, nh);
             capture.Stop();
+            ConfigureVddPosition(vddName, nw, nh, fps);
+            bool ok = false;
+            for (int attempt = 0; attempt < 24 && !g_stopRequested; ++attempt)
+            {
+                ::Sleep(250);
+                if (capture.Start(nw, nh, preferDev) && capture.Width() == nw && capture.Height() == nh) { ok = true; break; }
+                capture.Stop();
+            }
+            if (!ok && !capture.Start(nw, nh, preferDev))
+            {
+                std::fprintf(stderr, "[rotate] Capture could not restart\n");
+                return false;
+            }
         }
-        if (!ok && !capture.Start(nw, nh, preferDev))
-        {
-            std::fprintf(stderr, "[rotate] Capture could not restart\n");
-            return false;
-        }
-        encoder = CreateEncoderForAdapterVendor(capture.VendorId(), capture.Device(),
-            capture.Width(), capture.Height(), fps, br * 1000u * 1000u);
+        encoder = CreateVideoEncoder(capture.VendorId(), capture.Device(), capture.Width(), capture.Height(),
+            fps, br * 1000u * 1000u, tabletCodecMask, g_forceMediaFoundation, codec);
         if (!encoder)
         {
-            std::fprintf(stderr, "[rotate] Encoder could not restart\n");
+            std::fprintf(stderr, "[server] Encoder could not restart\n");
             return false;
         }
+        SetEncoderInfo(encoder->Name());
         capture.GetMonitorRect(monRect);
         injector.UpdateBounds(monRect);
         cfg.width = capture.Width();
         cfg.height = capture.Height();
+        cfg.codec = codec;
         server.UpdateStreamConfig(cfg);
         sinceIdr = 0;
-        std::fprintf(stderr, "[rotate] Done: %ux%u\n", capture.Width(), capture.Height());
+        std::fprintf(stderr, "[server] Stream rebuilt: %ux%u, %s\n", capture.Width(), capture.Height(), encoder->Name());
         return true;
     };
 
     while (!g_stopRequested.load())
     {
         uint32_t reqW = 0, reqH = 0;
-        if (server.ConsumeResizeRequest(reqW, reqH) && !rotateTo(reqW, reqH))
+        uint8_t reqMask = 0;
+        if (server.ConsumeResizeRequest(reqW, reqH, reqMask) && !rebuild(reqW, reqH, reqMask))
         {
             g_stopRequested = true;
             break;
@@ -1731,13 +1810,21 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow)
     LoadQuality();
 
     // CLI overrides
-    for (int i = 1; i < __argc; ++i)
+    // wWinMain only fills __wargv (__argv is null)
+    int argc = 0;
+    LPWSTR* argv = ::CommandLineToArgvW(::GetCommandLineW(), &argc);
+    for (int i = 1; argv && i + 1 < argc; ++i)
     {
-        if (::lstrcmpiA(__argv[i], "--width")   == 0 && i+1 < __argc) g_width   = static_cast<DWORD>(::atoi(__argv[++i]));
-        if (::lstrcmpiA(__argv[i], "--height")  == 0 && i+1 < __argc) g_height  = static_cast<DWORD>(::atoi(__argv[++i]));
-        if (::lstrcmpiA(__argv[i], "--fps")     == 0 && i+1 < __argc) g_fps     = static_cast<DWORD>(::atoi(__argv[++i]));
-        if (::lstrcmpiA(__argv[i], "--bitrate") == 0 && i+1 < __argc) g_bitrate = static_cast<DWORD>(::atoi(__argv[++i]));
+        const wchar_t* key = argv[i];
+        const wchar_t* value = argv[i + 1];
+        if      (!lstrcmpiW(key, L"--width"))   { g_width   = static_cast<DWORD>(_wtoi(value)); ++i; }
+        else if (!lstrcmpiW(key, L"--height"))  { g_height  = static_cast<DWORD>(_wtoi(value)); ++i; }
+        else if (!lstrcmpiW(key, L"--fps"))     { g_fps     = static_cast<DWORD>(_wtoi(value)); ++i; }
+        else if (!lstrcmpiW(key, L"--bitrate")) { g_bitrate = static_cast<DWORD>(_wtoi(value)); ++i; }
+        else if (!lstrcmpiW(key, L"--encoder")) { g_forceMediaFoundation = !lstrcmpiW(value, L"mf"); ++i; }
+        else if (!lstrcmpiW(key, L"--codec"))   { g_forceAvc = !lstrcmpiW(value, L"avc"); ++i; }
     }
+    if (argv) ::LocalFree(argv);
 
     SetupStderrRedirect();
 

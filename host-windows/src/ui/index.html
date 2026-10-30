@@ -218,7 +218,7 @@ footer a{color:var(--sub);text-decoration:none;cursor:pointer} footer a:hover{co
     <div class="logtools"><button class="ghost" id="copy" data-i="copy"></button><button class="ghost" id="clear" data-i="clear"></button></div>
   </details>
 
-  <footer><span>v1.2 · Gianfranco Lucarelli</span><a id="gh">GitHub ↗</a></footer>
+  <footer><span>v1.3 · Gianfranco Lucarelli</span><a id="gh">GitHub ↗</a></footer>
 </div>
 
 <script>
@@ -279,6 +279,7 @@ function tick(){
   if (S.w) parts.push(`${S.w} × ${S.h}`);
   if (S.fps) parts.push(`${S.fps} FPS`);
   if (S.br) parts.push(`${S.br} Mbps`);
+  if (S.enc) parts.push(S.enc);
   if (S.kind === "live" && S.liveSince){
     const s = Math.floor((Date.now() - S.liveSince)/1000);
     const mm = String(Math.floor(s/60)%60).padStart(2,"0"), ss = String(s%60).padStart(2,"0");
@@ -306,7 +307,7 @@ function addLog(line){
 
 if (host) host.addEventListener("message", e => {
   const m = e.data;
-  if (m.t === "state"){ Object.assign(S, {lang:m.lang, running:m.running, w:m.w, h:m.h, fps:m.fps, br:m.br, q:m.q});
+  if (m.t === "state"){ Object.assign(S, {lang:m.lang, running:m.running, w:m.w, h:m.h, fps:m.fps, br:m.br, q:m.q, enc:m.enc || ""});
     if (!m.running){ S.kind = "idle"; S.text = m.text || ""; } render(); }
   else if (m.t === "status"){
     if (m.kind === "live" && S.kind !== "live") S.liveSince = Date.now();

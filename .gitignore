@@ -30,3 +30,8 @@ host-windows/backups/
 
 # Vendored WebView2 static loader (needed to build)
 !host-windows/third_party/webview2/x64/WebView2LoaderStatic.lib
+
+# Android release signing (key stays outside the repo)
+keystore.properties
+*.jks
+*.keystore
